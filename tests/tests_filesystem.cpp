@@ -1,0 +1,389 @@
+/*
+ * tests_filesystem.cpp
+ *
+ * Copyright 2009-2026
+ * Giuseppe Penone <giuspen@gmail.com>
+ * Evgenii Gurianov <https://github.com/txe>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301, USA.
+ */
+
+#include "ct_filesystem.h"
+#include "ct_image.h"
+#include "tests_common.h"
+#include <glibmm.h>
+
+TEST(FileSystemGroup, path_stem)
+{
+#ifndef _WIN32
+    ASSERT_STREQ("", fs::path("").stem().c_str());
+    ASSERT_STREQ("file", fs::path("/root/file").stem().c_str());
+    ASSERT_STREQ("file", fs::path("/root/file.txt").stem().c_str());
+    ASSERT_STREQ("file.2", fs::path("/root/file.2.txt").stem().c_str());
+    ASSERT_STREQ(".txt", fs::path("/root/.txt").stem().c_str());
+#endif
+}
+
+TEST(FileSystemGroup, path_extension)
+{
+    ASSERT_STREQ("", fs::path("").extension().c_str());
+    ASSERT_STREQ("", fs::path(".").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path("file.txt").extension().c_str());
+    ASSERT_STREQ("", fs::path("file").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path("root/file.txt").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path("/root/file.txt").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path(".local/file.txt").extension().c_str());
+    ASSERT_STREQ(".my_bar", fs::path(".local/file.txt/.....my_bar").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path("/home/foo/.local/file.txt/.....my_bar/txt.txt").extension().c_str());
+    ASSERT_STREQ("", fs::path("/home/foo/.local/file.txt/.....my_bar/txt.").extension().c_str());
+    ASSERT_STREQ(".txt", fs::path("foo..txt").extension().c_str());
+    ASSERT_STREQ("", fs::path("/home/foo/.local").extension().c_str());
+    ASSERT_STREQ("", fs::path("/home/foo/.config").extension().c_str());
+}
+
+TEST(FileSystemGroup, get_cherrytree_datadir)
+{
+    // we expect the unit test to be run from the built sources
+    ASSERT_STREQ(_CMAKE_SOURCE_DIR, fs::get_cherrytree_datadir().c_str());
+}
+
+TEST(FileSystemGroup, get_cherrytree_localedir)
+{
+    // we expect the unit test to be run from the built sources
+    ASSERT_STREQ(fs::canonical(Glib::build_filename(_CMAKE_SOURCE_DIR, "po")).c_str(), fs::get_cherrytree_localedir().c_str());
+}
+
+TEST(FileSystemGroup, is_regular_file)
+{
+    ASSERT_FALSE(fs::is_regular_file(""));
+    ASSERT_TRUE(fs::is_regular_file(UT::testCtdDocPath));
+    ASSERT_TRUE(fs::is_regular_file(UT::testCtbDocPath));
+    ASSERT_TRUE(fs::is_regular_file(UT::unitTestsDataDir + "/md_testfile.md"));
+    ASSERT_FALSE(fs::is_regular_file(UT::unitTestsDataDir));
+    ASSERT_FALSE(fs::is_regular_file(fs::absolute(UT::unitTestsDataDir)));
+    ASSERT_FALSE(fs::is_regular_file(fs::absolute(UT::unitTestsDataDir).parent_path()));
+}
+
+TEST(FileSystemGroup, is_directory)
+{
+    ASSERT_FALSE(fs::is_directory(""));
+    ASSERT_TRUE(fs::is_directory(UT::unitTestsDataDir));
+    ASSERT_FALSE(fs::is_directory(UT::testCtdDocPath));
+    ASSERT_TRUE(fs::is_directory(fs::path(UT::unitTestsDataDir).parent_path()));
+    ASSERT_FALSE(fs::is_directory(fs::path(UT::unitTestsDataDir).parent_path() / "test_consts.h"));
+}
+
+TEST(FileSystemGroup, get_doc_type_from_file_ext)
+{
+    ASSERT_TRUE(CtDocType::SQLite == fs::get_doc_type_from_file_ext(UT::testCtbDocPath));
+    ASSERT_TRUE(CtDocType::XML == fs::get_doc_type_from_file_ext(UT::testCtdDocPath));
+    ASSERT_TRUE(CtDocType::None == fs::get_doc_type_from_file_ext(UT::unitTestsDataDir + "/md_testfile.md"));
+    ASSERT_TRUE(CtDocType::SQLite == fs::get_doc_type_from_file_ext(UT::unitTestsDataDir + "/mimetype_ctb.ctb"));
+    ASSERT_TRUE(CtDocType::XML == fs::get_doc_type_from_file_ext(UT::unitTestsDataDir + "/7zr.ctz"));
+    ASSERT_TRUE(CtDocType::SQLite == fs::get_doc_type_from_file_ext("test.ctx")); // Doesnt actually exist
+}
+
+TEST(FileSystemGroup, get_doc_encrypt_from_file_ext)
+{
+    ASSERT_TRUE(fs::get_doc_encrypt_from_file_ext(UT::testCtbDocPath) == CtDocEncrypt::False);
+    ASSERT_TRUE(fs::get_doc_encrypt_from_file_ext(UT::testCtzDocPath) == CtDocEncrypt::True);
+    ASSERT_TRUE(fs::get_doc_encrypt_from_file_ext(UT::unitTestsDataDir + "/mimetype_txt.txt") == CtDocEncrypt::None);
+}
+
+TEST(FileSystemGroup, path_is_absolute)
+{
+    ASSERT_TRUE(fs::path("/home/foo").is_absolute());
+    ASSERT_FALSE(fs::path("/home/foo").is_relative());
+    ASSERT_TRUE(fs::path("home/foo").is_relative());
+    ASSERT_FALSE(fs::path("home/foo").is_absolute());
+}
+
+TEST(FileSystemGroup, path_parent_path)
+{
+    ASSERT_STREQ(fs::path("/home").c_str(), fs::path("/home/foo").parent_path().c_str());
+    ASSERT_STREQ(fs::path("/home/foo").c_str(), fs::path("/home/foo/bar.txt").parent_path().c_str());
+    ASSERT_STREQ(fs::path("home/foo").c_str(), fs::path("home/foo/bar.txt").parent_path().c_str());
+}
+
+TEST(FileSystemGroup, path_concat)
+{
+    fs::path p1("/home/foo/bar");
+    fs::path p2(".txt");
+    p1 += p2;
+    ASSERT_STREQ("/home/foo/bar.txt", p1.c_str());
+}
+
+TEST(FileSystemGroup, path_native)
+{
+#ifndef _WIN32
+    std::string first = "/foo";
+#else
+    std::string first = "\\foo";
+#endif
+    fs::path p("/foo");
+    ASSERT_STREQ(p.string_native().c_str(), first.c_str());
+}
+
+TEST(FileSystemGroup, path_unix)
+{
+    fs::path p("C:\\foo\\bar");
+    std::string first = "C:/foo/bar";
+    ASSERT_STREQ(p.string_unix().c_str(), first.c_str());
+}
+
+TEST(FileSystemGroup, remove)
+{
+    // file remove
+    fs::path test_file_path = fs::path{UT::unitTestsDataDir} / fs::path{"test_file.txt"};
+    Glib::file_set_contents(test_file_path.string(), "blabla");
+    ASSERT_TRUE(fs::exists(test_file_path));
+
+    ASSERT_TRUE(fs::remove(test_file_path));
+    ASSERT_FALSE(fs::exists(test_file_path));
+    ASSERT_FALSE(fs::remove(test_file_path));
+
+    // empty dir remove
+    fs::path test_dir_path = fs::path{UT::unitTestsDataDir} / fs::path{"test_dir"};
+    ASSERT_EQ(0, g_mkdir_with_parents(test_dir_path.c_str(), 0755));
+    ASSERT_TRUE(fs::exists(test_dir_path));
+    ASSERT_TRUE(fs::remove(test_dir_path));
+    ASSERT_FALSE(fs::exists(test_dir_path));
+    ASSERT_FALSE(fs::remove(test_dir_path));
+
+    // non empty dir remove
+    ASSERT_EQ(0, g_mkdir_with_parents(test_dir_path.c_str(), 0755));
+    fs::path test_file_in_dir = test_dir_path / fs::path{"test_file.txt"};
+    Glib::file_set_contents(test_file_in_dir.string(), "blabla");
+    ASSERT_TRUE(fs::exists(test_file_in_dir));
+    ASSERT_EQ(2, fs::remove_all(test_dir_path));
+    ASSERT_FALSE(fs::exists(test_dir_path));
+
+    // file remove with remove_all
+    Glib::file_set_contents(test_file_path.string(), "blabla");
+    ASSERT_TRUE(fs::exists(test_file_path));
+
+    ASSERT_EQ(1, fs::remove_all(test_file_path));
+    ASSERT_FALSE(fs::exists(test_dir_path));
+    ASSERT_EQ(0, fs::remove_all(test_file_path));
+}
+
+TEST(FileSystemGroup, move)
+{
+    fs::path test_file_path = fs::path{UT::unitTestsDataDir} / fs::path{"test_mv.txt"};
+    fs::path test_dir_path1 = fs::path{UT::unitTestsDataDir} / fs::path{"test_mv_dir1"};
+    fs::path test_dir_path2 = fs::path{UT::unitTestsDataDir} / fs::path{"test_mv_dir2"};
+    if (fs::exists(test_dir_path1)) fs::remove_all(test_dir_path1);
+    if (fs::exists(test_dir_path2)) fs::remove_all(test_dir_path2);
+
+    Glib::file_set_contents(test_file_path.string(), "blabla");
+    ASSERT_TRUE(fs::is_regular_file(test_file_path));
+    ASSERT_EQ(0, g_mkdir_with_parents(test_dir_path1.c_str(), 0755));
+    ASSERT_EQ(0, g_mkdir_with_parents(test_dir_path2.c_str(), 0755));
+    ASSERT_TRUE(fs::is_directory(test_dir_path1));
+    ASSERT_TRUE(fs::is_directory(test_dir_path2));
+
+    ASSERT_TRUE(fs::move_file(test_file_path, test_dir_path1 / fs::path{"test_mv.txt"}));
+    ASSERT_TRUE(fs::is_regular_file(test_dir_path1 / fs::path{"test_mv.txt"}));
+    ASSERT_FALSE(fs::exists(test_file_path));
+
+    ASSERT_TRUE(fs::move_file(test_dir_path1, test_dir_path2 / test_dir_path1.filename()));
+    ASSERT_TRUE(fs::is_directory(test_dir_path2 / test_dir_path1.filename()));
+    ASSERT_TRUE(fs::is_regular_file(test_dir_path2 / test_dir_path1.filename() / fs::path{"test_mv.txt"}));
+    ASSERT_FALSE(fs::is_directory(test_dir_path1));
+    ASSERT_EQ(1, fs::get_dir_entries(test_dir_path2).size());
+    ASSERT_EQ(1, fs::get_dir_entries(test_dir_path2 / test_dir_path1.filename()).size());
+    ASSERT_EQ(3, fs::remove_all(test_dir_path2));
+}
+
+TEST(FileSystemGroup, relative)
+{
+#ifdef _WIN32
+    ASSERT_STREQ("test.txt", fs::relative("C:\\tmp\\test.txt", "C:\\tmp").c_str());
+    ASSERT_STREQ("tmp\\test.txt", fs::relative("C:\\tmp\\test.txt", "C:\\").c_str());
+    ASSERT_STREQ("..\\test.txt", fs::relative("C:\\tmp\\test.txt", "C:\\tmp\\one").c_str());
+    ASSERT_STREQ("..\\..\\test.txt", fs::relative("C:\\tmp\\test.txt", "C:\\tmp\\one\\two").c_str());
+    ASSERT_STREQ("C:\\tmp\\test.txt", fs::relative("C:\\tmp\\test.txt", "D:\\tmp").c_str());
+#else
+    ASSERT_STREQ("test.txt", fs::relative("/tmp/test.txt", "/tmp").c_str());
+    ASSERT_STREQ("tmp/test.txt", fs::relative("/tmp/test.txt", "/").c_str());
+    ASSERT_STREQ("../test.txt", fs::relative("/tmp/test.txt", "/tmp/one").c_str());
+    ASSERT_STREQ("../../test.txt", fs::relative("/tmp/test.txt", "/tmp/one/two").c_str());
+#endif // _WIN32
+}
+
+TEST(FileSystemGroup, canonicalize_filename)
+{
+#ifdef _WIN32
+    ASSERT_STREQ("C:\\opt\\one\\two\\three.txt", fs_canonicalize_filename("two\\three.txt", "C:\\opt\\one").c_str());
+    ASSERT_STREQ("C:\\opt\\one\\two\\three.txt", fs_canonicalize_filename(".\\two\\three.txt", "C:\\opt\\one").c_str());
+    ASSERT_STREQ("C:\\opt\\one\\two\\three.txt", fs_canonicalize_filename("..\\two\\three.txt", "C:\\opt\\one\\four").c_str());
+    ASSERT_STREQ("C:\\opt\\one\\two\\three.txt", fs_canonicalize_filename("C:\\opt\\one\\two\\three.txt", "C:\\four\\five").c_str());
+#else
+    ASSERT_STREQ("/opt/one/two/three.txt", fs_canonicalize_filename("two/three.txt", "/opt/one").c_str());
+    ASSERT_STREQ("/opt/one/two/three.txt", fs_canonicalize_filename("./two/three.txt", "/opt/one").c_str());
+    ASSERT_STREQ("/opt/one/two/three.txt", fs_canonicalize_filename("../two/three.txt", "/opt/one/four").c_str());
+    ASSERT_STREQ("/opt/one/two/three.txt", fs_canonicalize_filename("/opt/one/two/three.txt", "/four/five").c_str());
+#endif
+}
+
+TEST(FileSystemGroup, is_file_image)
+{
+    ASSERT_FALSE(fs::is_file_image(""));
+    ASSERT_FALSE(fs::is_file_image(UT::testCtdDocPath));
+    ASSERT_FALSE(fs::is_file_image(UT::unitTestsDataDir));
+    ASSERT_TRUE(fs::is_file_image(UT::testImagePng));
+    ASSERT_TRUE(fs::is_file_image(UT::testImageJpg));
+    ASSERT_TRUE(fs::is_file_image(UT::testImageBmp));
+    ASSERT_TRUE(fs::is_file_image(UT::testImageGif));
+    ASSERT_TRUE(fs::is_file_image(UT::testImageWebp));
+    ASSERT_TRUE(fs::is_file_image(UT::testImageSvg));
+}
+
+TEST(FileSystemGroup, custom_action_build_argv)
+{
+    // Normal substitution with trailing '&'
+    std::vector<std::string> argv1 = fs::custom_action_build_argv("firefox %s &", "https://example.com");
+    ASSERT_EQ(2u, argv1.size());
+    ASSERT_EQ("firefox", argv1[0]);
+    ASSERT_EQ("https://example.com", argv1[1]);
+
+    // Shell metacharacters are preserved verbatim as single argv element
+    std::vector<std::string> argv2 = fs::custom_action_build_argv("firefox %s &", "http://x&id>/tmp/CT_RCE_PROOF;echo");
+    ASSERT_EQ(2u, argv2.size());
+    ASSERT_EQ("firefox", argv2[0]);
+    ASSERT_EQ("http://x&id>/tmp/CT_RCE_PROOF;echo", argv2[1]);
+
+    // Template with quotes around URI prefix
+    std::vector<std::string> argv3 = fs::custom_action_build_argv("xdg-open \"file://%s\" &", "/path/to/my file.txt");
+    ASSERT_EQ(2u, argv3.size());
+    ASSERT_EQ("xdg-open", argv3[0]);
+    ASSERT_EQ("file:///path/to/my file.txt", argv3[1]);
+
+    // Template with flags
+    std::vector<std::string> argv4 = fs::custom_action_build_argv("google-chrome --incognito %s", "https://example.com");
+    ASSERT_EQ(3u, argv4.size());
+    ASSERT_EQ("google-chrome", argv4[0]);
+    ASSERT_EQ("--incognito", argv4[1]);
+    ASSERT_EQ("https://example.com", argv4[2]);
+
+    // Template without %s appends target
+    std::vector<std::string> argv5 = fs::custom_action_build_argv("firefox", "https://example.com");
+    ASSERT_EQ(2u, argv5.size());
+    ASSERT_EQ("firefox", argv5[0]);
+    ASSERT_EQ("https://example.com", argv5[1]);
+
+    // Windows rundll32 FileProtocolHandler template
+    std::vector<std::string> argv6 = fs::custom_action_build_argv("rundll32.exe url.dll,FileProtocolHandler %s", "https://example.com");
+    ASSERT_EQ(3u, argv6.size());
+    ASSERT_EQ("rundll32.exe", argv6[0]);
+    ASSERT_EQ("url.dll,FileProtocolHandler", argv6[1]);
+    ASSERT_EQ("https://example.com", argv6[2]);
+
+    // Empty template returns empty argv
+    ASSERT_TRUE(fs::custom_action_build_argv("", "https://example.com").empty());
+    // Only '&' returns empty argv
+    ASSERT_TRUE(fs::custom_action_build_argv("&", "https://example.com").empty());
+}
+
+TEST(FileSystemGroup, sanitize_embedded_filename)
+{
+    // Normal filenames
+    ASSERT_STREQ("test.txt", CtImageEmbFile::sanitize_filename("test.txt").c_str());
+    ASSERT_STREQ("document.pdf", CtImageEmbFile::sanitize_filename("document.pdf").c_str());
+    ASSERT_STREQ("my file name.docx", CtImageEmbFile::sanitize_filename("my file name.docx").c_str());
+
+    // Unix absolute paths
+    ASSERT_STREQ("passwd", CtImageEmbFile::sanitize_filename("/etc/passwd").c_str());
+    ASSERT_STREQ("id_rsa", CtImageEmbFile::sanitize_filename("/home/user/.ssh/id_rsa").c_str());
+
+    // Home directory shortcut
+    ASSERT_STREQ("id_rsa", CtImageEmbFile::sanitize_filename("~/.ssh/id_rsa").c_str());
+    ASSERT_STREQ("secret.txt", CtImageEmbFile::sanitize_filename("~/secret.txt").c_str());
+
+    // Relative directory traversal
+    ASSERT_STREQ("shadow", CtImageEmbFile::sanitize_filename("../../../../etc/shadow").c_str());
+    ASSERT_STREQ("passwords.txt", CtImageEmbFile::sanitize_filename("..\\..\\passwords.txt").c_str());
+    ASSERT_STREQ("config.ini", CtImageEmbFile::sanitize_filename("foo/../../bar/config.ini").c_str());
+
+    // Windows paths
+    ASSERT_STREQ("secret.txt", CtImageEmbFile::sanitize_filename("C:\\Users\\victim\\secret.txt").c_str());
+    ASSERT_STREQ("data.db", CtImageEmbFile::sanitize_filename("\\\\server\\share\\data.db").c_str());
+    ASSERT_STREQ("boot.ini", CtImageEmbFile::sanitize_filename("C:boot.ini").c_str());
+
+    // Bare traversal tokens and edge cases
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename(".").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("..").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("~").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("/").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("\\").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("///").c_str());
+    ASSERT_STREQ("embedded_file", CtImageEmbFile::sanitize_filename("C:\\").c_str());
+
+    // Trailing slashes
+    ASSERT_STREQ("file.pdf", CtImageEmbFile::sanitize_filename("/path/to/file.pdf/").c_str());
+    ASSERT_STREQ("file.pdf", CtImageEmbFile::sanitize_filename("file.pdf\\").c_str());
+}
+
+TEST(FileSystemGroup, embedded_file_multifile_symlinks_are_rejected)
+{
+    GError* error{nullptr};
+    gchar* tempDirRaw = g_dir_make_tmp("cherrytree-embedded-file-XXXXXX", &error);
+    ASSERT_NE(nullptr, tempDirRaw) << (error ? error->message : "unable to create temporary directory");
+    g_clear_error(&error);
+    const fs::path tempDir{tempDirRaw};
+    g_free(tempDirRaw);
+
+    const fs::path rootDir = tempDir / "document";
+    const fs::path outsideDir = tempDir / "outside";
+    ASSERT_EQ(0, g_mkdir_with_parents(rootDir.c_str(), 0755));
+    ASSERT_EQ(0, g_mkdir_with_parents(outsideDir.c_str(), 0755));
+    const fs::path outsideFile = outsideDir / "secret.txt";
+    Glib::file_set_contents(outsideFile.string(), "canary");
+    const fs::path nestedNodeDir = rootDir / "node-1" / "node-2";
+    ASSERT_EQ(0, g_mkdir_with_parents(nestedNodeDir.c_str(), 0755));
+    const fs::path regularFile = nestedNodeDir / "regular.txt";
+    Glib::file_set_contents(regularFile.string(), "inside");
+
+    ASSERT_TRUE(CtImageEmbFile::is_safe_multifile_file(regularFile, rootDir));
+    ASSERT_FALSE(CtImageEmbFile::is_safe_multifile_file(outsideFile, rootDir));
+
+    const fs::path fileSymlink = rootDir / "embedded.txt";
+    GFile* fileSymlinkGFile = g_file_new_for_path(fileSymlink.c_str());
+    const gboolean fileSymlinkCreated = g_file_make_symbolic_link(fileSymlinkGFile, outsideFile.c_str(), nullptr, &error);
+    g_object_unref(fileSymlinkGFile);
+    if (not fileSymlinkCreated) {
+        const std::string errorMessage = error ? error->message : "symbolic links are not supported";
+        g_clear_error(&error);
+        fs::remove_all(tempDir);
+        GTEST_SKIP() << errorMessage;
+    }
+    ASSERT_FALSE(CtImageEmbFile::is_safe_multifile_file(fileSymlink, rootDir));
+
+    const fs::path beforeSymlink = rootDir / ".before";
+    GFile* beforeSymlinkGFile = g_file_new_for_path(beforeSymlink.c_str());
+    const gboolean beforeSymlinkCreated = g_file_make_symbolic_link(beforeSymlinkGFile, outsideDir.c_str(), nullptr, &error);
+    g_object_unref(beforeSymlinkGFile);
+    if (not beforeSymlinkCreated) {
+        const std::string errorMessage = error ? error->message : "symbolic links are not supported";
+        g_clear_error(&error);
+        fs::remove_all(tempDir);
+        GTEST_SKIP() << errorMessage;
+    }
+    ASSERT_FALSE(CtImageEmbFile::is_safe_multifile_file(beforeSymlink / "secret.txt", rootDir));
+
+    fs::remove_all(tempDir);
+}
