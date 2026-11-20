@@ -82,8 +82,15 @@ protected:
     void          _on_menu_unmount();
     void          _on_menu_jump_note();
     void          _on_menu_remove_shortcut();
+    void          _on_menu_insert_link_into_note();
+    void          _on_menu_copy_path();
     void          _add_mount_interactive();
     void          _add_note_shortcut_interactive();
+    void          _on_search_entry_activate();
+    void          _run_search(const Glib::ustring& query);
+    void          _search_recursive(const std::string& dirPath, const Glib::ustring& needleLower,
+                                  std::vector<std::pair<std::string, bool>>& results, size_t& count);
+    void          _exit_search_mode();
     Glib::RefPtr<Gdk::Pixbuf> _get_entry_icon(const std::string& path, bool isDir);
     void          _start_file_monitors();
     void          _stop_file_monitors();
@@ -98,6 +105,10 @@ protected:
     Glib::RefPtr<Gtk::TreeStore> _rTreeStore;
     Gtk::TreeView    _treeView;
     Gtk::Label       _headerLabel;
+    Gtk::SearchEntry _searchEntry;
+    bool             _searchMode{false};
+    Glib::ustring    _searchQuery;
+    std::vector<std::pair<std::string, bool>> _searchResults; // <path, isDir>
     std::vector<Glib::RefPtr<Gio::FileMonitor>> _fileMonitors;
     sigc::connection _pendingRefreshConn;
     std::list<sigc::connection> _sigcConnections;

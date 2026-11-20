@@ -30,6 +30,13 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
     _headerLabel.get_style_context()->add_class("ct-project-panel-header");
     pack_start(_headerLabel, Gtk::PACK_SHRINK);
 
+    // filename search box (Enter to search across all mounted folders)
+    _searchEntry.set_placeholder_text("搜索文件名，回车执行...");
+    pack_start(_searchEntry, Gtk::PACK_SHRINK);
+    _searchEntry.signal_activate().connect(sigc::mem_fun(*this, &CtProjectPanel::_on_search_entry_activate));
+    _searchEntry.signal_icon_press().connect(
+        [this](Gtk::EntryIconPosition, const GdkEventButton*) { _exit_search_mode(); });
+
     _rTreeStore = Gtk::TreeStore::create(_columns);
     _treeView.set_model(_rTreeStore);
     _treeView.set_headers_visible(false);
@@ -87,7 +94,12 @@ void CtProjectPanel::set_workspace(const std::vector<std::string>& mounts, const
         return;
     }
     show_all_children();
-    _populate_root();
+    if (_searchMode) {
+        _run_search(_searchQuery); // workspace changed: re-run the active search
+    }
+    else {
+        _populate_root();
+    }
     _start_file_monitors();
 }
 
@@ -165,6 +177,23 @@ void CtProjectPanel::refresh()
 
 void CtProjectPanel::_populate_root()
 {
+    if (_searchMode) {
+        // flat list of search results
+        _rTreeStore->clear();
+        for (const auto& result : _searchResults) {
+            const std::string& fullPath = result.first;
+            Gtk::TreeModel::Row row = *_rTreeStore->append();
+            row[_columns.rColPixbuf] = _get_entry_icon(fullPath, result.second);
+            row[_columns.colName] = Glib::path_get_basename(fullPath);
+            row[_columns.colPath] = fullPath;
+            row[_columns.colIsDir] = result.second;
+            row[_columns.colKind] = KindFs;
+            row[_columns.colNodeId] = 0;
+            row[_columns.colDummy] = false;
+        }
+        return;
+    }
+
     // remember expanded folders to restore them after the rescan
     std::set<std::string> expandedPaths;
     for (auto& row : _rTreeStore->children()) {
@@ -384,7 +413,7 @@ void CtProjectPanel::_show_context_menu(GdkEventButton* pEvent, const Gtk::TreeM
     Gtk::TreeModel::Row row = *iter;
     const int kind = row[_columns.colKind];
     const bool isDir = row[_columns.colIsDir];
-    const bool isMountRoot = (KindFs == kind) and not iter->parent();
+    const bool isMountRoot = (KindFs == kind) and not _searchMode and not iter->parent();
 
     if (KindNoteShortcut == kind) {
         addMenuItem("跳转到笔记", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_jump_note));
@@ -393,6 +422,8 @@ void CtProjectPanel::_show_context_menu(GdkEventButton* pEvent, const Gtk::TreeM
     else {
         addMenuItem("打开", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_open));
         addMenuItem("在文件管理器中打开", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_open_in_file_manager));
+        addMenuItem("插入链接到当前笔记", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_insert_link_into_note));
+        addMenuItem("复制文件路径", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_copy_path));
         if (isDir) {
             addMenuItem("添加文件到此处...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_add_file));
             addMenuItem("在此新建文件夹...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_new_folder));
@@ -604,6 +635,123 @@ void CtProjectPanel::_on_menu_remove_shortcut()
         return;
     }
     remove_note_shortcut((*iter)[_columns.colNodeId]);
+}
+
+void CtProjectPanel::_on_menu_insert_link_into_note()
+{
+    Gtk::TreeModel::iterator iter = _treeView.get_selection()->get_selected();
+    if (not iter or KindNoteShortcut == (*iter)[_columns.colKind]) {
+        return;
+    }
+    Gtk::TreeModel::Row row = *iter;
+    const std::string entryPath = row[_columns.colPath];
+    if (entryPath.empty()) {
+        return;
+    }
+    CtTreeIter ctIter = _pCtMainWin->curr_tree_iter();
+    if (not ctIter) {
+        CtDialogs::warning_dialog("尚未选中任何笔记", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    auto rBuffer = _pCtMainWin->get_text_view().get_buffer();
+    const int startOffset = rBuffer->get_insert()->get_iter().get_offset();
+    rBuffer->insert(rBuffer->get_insert()->get_iter(), row[_columns.colName]);
+    const std::string propertyValue = std::string(row[_columns.colIsDir] ? CtConst::LINK_TYPE_FOLD : CtConst::LINK_TYPE_FILE)
+        + " " + Glib::Base64::encode(entryPath);
+    rBuffer->apply_tag_by_name(
+        _pCtMainWin->get_text_tag_name_exist_or_create(CtConst::TAG_LINK, propertyValue),
+        rBuffer->get_iter_at_offset(startOffset), rBuffer->get_insert()->get_iter());
+}
+
+void CtProjectPanel::_on_menu_copy_path()
+{
+    Gtk::TreeModel::iterator iter = _treeView.get_selection()->get_selected();
+    if (not iter or KindNoteShortcut == (*iter)[_columns.colKind]) {
+        return;
+    }
+    const std::string entryPath = (*iter)[_columns.colPath];
+    if (entryPath.empty()) {
+        return;
+    }
+    Gtk::Clipboard::get(GDK_SELECTION_CLIPBOARD)->set_text(entryPath);
+}
+
+void CtProjectPanel::_on_search_entry_activate()
+{
+    const Glib::ustring query = _searchEntry.get_text();
+    if (query.empty()) {
+        _exit_search_mode();
+        return;
+    }
+    _run_search(query);
+}
+
+void CtProjectPanel::_exit_search_mode()
+{
+    if (not _searchMode) {
+        return;
+    }
+    _searchMode = false;
+    _searchQuery.clear();
+    _searchResults.clear();
+    if (not _searchEntry.get_text().empty()) {
+        _searchEntry.set_text("");
+    }
+    _populate_root();
+}
+
+void CtProjectPanel::_run_search(const Glib::ustring& query)
+{
+    if (_mountFolders.empty()) {
+        return;
+    }
+    _searchMode = true;
+    _searchQuery = query;
+    _searchResults.clear();
+    const Glib::ustring needleLower = query.lowercase();
+    size_t count = 0;
+    for (const std::string& mountPath : _mountFolders) {
+        _search_recursive(mountPath, needleLower, _searchResults, count);
+        if (count >= 500) {
+            break; // safety cap
+        }
+    }
+    _populate_root();
+}
+
+void CtProjectPanel::_search_recursive(const std::string& dirPath, const Glib::ustring& needleLower,
+                                       std::vector<std::pair<std::string, bool>>& results, size_t& count)
+{
+    if (count >= 500) {
+        return;
+    }
+    std::vector<std::string> names;
+    try {
+        Glib::Dir dir{dirPath};
+        for (const std::string& name : dir) {
+            if (not name.empty() and name[0] == '.') {
+                continue; // skip hidden entries
+            }
+            names.push_back(name);
+        }
+    }
+    catch (const Glib::Error&) {
+        return;
+    }
+    for (const std::string& name : names) {
+        if (count >= 500) {
+            return;
+        }
+        const std::string fullPath = Glib::build_filename(dirPath, name);
+        const bool isDir = Glib::file_test(fullPath, Glib::FILE_TEST_IS_DIR);
+        if (Glib::ustring(name).lowercase().find(needleLower) != Glib::ustring::npos) {
+            results.emplace_back(fullPath, isDir);
+            ++count;
+        }
+        if (isDir) {
+            _search_recursive(fullPath, needleLower, results, count);
+        }
+    }
 }
 
 Glib::RefPtr<Gdk::Pixbuf> CtProjectPanel::_get_entry_icon(const std::string& path, bool isDir)
