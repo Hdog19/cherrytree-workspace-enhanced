@@ -253,6 +253,8 @@ void CtConfig::_populate_keyfile_from_data()
     _uKeyFile->set_integer(_currentGroup, "vpaned_pos", vpanedPos);
     _uKeyFile->set_boolean(_currentGroup, "tree_visible", treeVisible);
     _uKeyFile->set_boolean(_currentGroup, "vte_visible", vteVisible);
+    _uKeyFile->set_boolean(_currentGroup, "right_sidebar_visible", rightSidebarVisible);
+    _uKeyFile->set_integer(_currentGroup, "right_sidebar_width", rightSidebarWidth);
     _uKeyFile->set_boolean(_currentGroup, "menubar_visible", menubarVisible);
     _uKeyFile->set_string(_currentGroup, "pick_dir_import", pickDirImport);
     _uKeyFile->set_string(_currentGroup, "pick_dir_export", pickDirExport);
@@ -260,6 +262,19 @@ void CtConfig::_populate_keyfile_from_data()
     _uKeyFile->set_string(_currentGroup, "pick_dir_img", pickDirImg);
     _uKeyFile->set_string(_currentGroup, "pick_dir_csv", pickDirCsv);
     _uKeyFile->set_string(_currentGroup, "pick_dir_cbox", pickDirCbox);
+    _uKeyFile->set_string(_currentGroup, "project_folder", projectFolderPath);
+    {
+        std::vector<Glib::ustring> folderList;
+        for (const std::string& folder : workspaceFolders) {
+            folderList.push_back(folder);
+        }
+        _uKeyFile->set_string_list(_currentGroup, "workspace_folders", folderList);
+        std::vector<Glib::ustring> shortcutList;
+        for (const gint64 nodeId : workspaceNoteShortcuts) {
+            shortcutList.push_back(std::to_string(nodeId));
+        }
+        _uKeyFile->set_string_list(_currentGroup, "workspace_note_shortcuts", shortcutList);
+    }
     _uKeyFile->set_string(_currentGroup, "link_type", linkType);
     _uKeyFile->set_boolean(_currentGroup, "menubar_in_titlebar", menubarInTitlebar);
     _uKeyFile->set_boolean(_currentGroup, "show_node_name_header", showNodeNameHeader);
@@ -535,6 +550,35 @@ void CtConfig::_populate_data_from_keyfile()
     _populate_bool_from_keyfile("toolbar_visible", &toolbarVisible);
     _populate_bool_from_keyfile("statusbar_visible", &statusbarVisible);
     _populate_bool_from_keyfile("tree_lines_visible", &treeLinesVisible);
+    _populate_string_from_keyfile("project_folder", &projectFolderPath);
+    {
+        // workspace mounts (with migration from the legacy single project_folder key)
+        if (_uKeyFile->has_group(_currentGroup) && _uKeyFile->has_key(_currentGroup, "workspace_folders")) {
+            try {
+                workspaceFolders.clear();
+                for (const Glib::ustring& folder : _uKeyFile->get_string_list(_currentGroup, "workspace_folders")) {
+                    workspaceFolders.push_back(folder);
+                }
+            }
+            catch (Glib::KeyFileError& kferror) {
+                _unexpected_keyfile_error("workspace_folders", kferror);
+            }
+        }
+        if (workspaceFolders.empty() and not projectFolderPath.empty()) {
+            workspaceFolders.push_back(projectFolderPath);
+        }
+        if (_uKeyFile->has_group(_currentGroup) && _uKeyFile->has_key(_currentGroup, "workspace_note_shortcuts")) {
+            try {
+                workspaceNoteShortcuts.clear();
+                for (const Glib::ustring& s : _uKeyFile->get_string_list(_currentGroup, "workspace_note_shortcuts")) {
+                    workspaceNoteShortcuts.push_back(std::stoll(s));
+                }
+            }
+            catch (Glib::KeyFileError& kferror) {
+                _unexpected_keyfile_error("workspace_note_shortcuts", kferror);
+            }
+        }
+    }
     _populate_bool_from_keyfile("win_is_maximized", &winIsMaximised);
     _populate_int_from_keyfile("win_position_x", &winRect[0]);
     _populate_int_from_keyfile("win_position_y", &winRect[1]);
@@ -544,6 +588,8 @@ void CtConfig::_populate_data_from_keyfile()
     _populate_int_from_keyfile("vpaned_pos", &vpanedPos);
     _populate_bool_from_keyfile("tree_visible", &treeVisible);
     _populate_bool_from_keyfile("vte_visible", &vteVisible);
+    _populate_bool_from_keyfile("right_sidebar_visible", &rightSidebarVisible);
+    _populate_int_from_keyfile("right_sidebar_width", &rightSidebarWidth);
     _populate_bool_from_keyfile("menubar_visible", &menubarVisible);
     if (savedFromPyGtk) {
         CtRecentDocRestore recentDocRestore;

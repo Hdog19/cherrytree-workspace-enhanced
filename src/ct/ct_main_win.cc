@@ -30,6 +30,7 @@
 #endif
 #include "ct_main_win.h"
 #include "ct_actions.h"
+#include "ct_project_panel.h"
 #include "ct_storage_control.h"
 #include "ct_clipboard.h"
 #include "ct_dialogs.h"
@@ -154,38 +155,56 @@ CtMainWin::CtMainWin(bool                            no_gui,
     _scrolledwindowTree.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     _scrolledwindowTree.get_style_context()->add_class("ct-tree-scroll-panel");
     _scrolledwindowText.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    _uCtProjectPanel.reset(new CtProjectPanel{this});
+    // first time the workspace sidebar is mapped (shown), reserve its configured width on the right
+    _uCtProjectPanel->signal_map().connect([this]() {
+        if (not _sidebarPosInit) {
+            _sidebarPosInit = true;
+            const int width = _hPanedRight.get_width();
+            if (width > 0) {
+                _hPanedRight.set_position(std::max(width - _pCtConfig->rightSidebarWidth, width / 2));
+            }
+        }
+    });
 #if GTKMM_MAJOR_VERSION >= 4
     _scrolledwindowText.set_child(_ctTextview.mm());
     _vboxText.append(_init_window_header());
-    _vboxText.append(_scrolledwindowText);
-    _scrolledwindowText.set_expand(true);
+    _hPanedRight.set_start_child(_scrolledwindowText);
+    _hPanedRight.set_end_child(*_uCtProjectPanel);
+    _hPanedRight.set_expand(true);
+    _vboxText.append(_hPanedRight);
     _vboxText.set_expand(true);
-    _scrolledwindowTree.set_expand(false);
+    _vboxTree.append(_scrolledwindowTree);
+    _scrolledwindowTree.set_expand(true);
     if (_pCtConfig->treeRightSide) {
         _hPaned.set_start_child(_vboxText);
-        _hPaned.set_end_child(_scrolledwindowTree);
+        _hPaned.set_end_child(_vboxTree);
     }
     else {
-        _hPaned.set_start_child(_scrolledwindowTree);
+        _hPaned.set_start_child(_vboxTree);
         _hPaned.set_end_child(_vboxText);
     }
     _hPaned.set_expand(true);
     _vPaned.set_start_child(_hPaned);
 #else
     _scrolledwindowText.add(_ctTextview.mm());
+    _hPanedRight.pack1(_scrolledwindowText, Gtk::EXPAND);
+    _hPanedRight.pack2(*_uCtProjectPanel, Gtk::FILL);
     _vboxText.pack_start(_init_window_header(), false, false);
-    _vboxText.pack_start(_scrolledwindowText);
+    _vboxText.pack_start(_hPanedRight);
+    _vboxTree.pack_start(_scrolledwindowTree, Gtk::PACK_EXPAND_WIDGET);
     if (_pCtConfig->treeRightSide) {
         _hPaned.pack1(_vboxText, Gtk::EXPAND);
-        _hPaned.pack2(_scrolledwindowTree, Gtk::FILL);
+        _hPaned.pack2(_vboxTree, Gtk::FILL);
     }
     else {
-        _hPaned.pack1(_scrolledwindowTree, Gtk::FILL);
+        _hPaned.pack1(_vboxTree, Gtk::FILL);
         _hPaned.pack2(_vboxText, Gtk::EXPAND);
     }
     _vPaned.pack1(_hPaned, Gtk::EXPAND);
 #endif
     _hPaned.property_wide_handle() = true;
+    update_project_panel();
 #if GTKMM_MAJOR_VERSION >= 4
     init_app_actions_gtk4();
 #endif
@@ -596,6 +615,7 @@ void CtMainWin::_reset_CtTreestore_CtTreeview()
     _uCtTreestore->tree_view_connect(_uCtTreeview.get());
     _uCtTreeview->set_tree_node_name_wrap_width(_pCtConfig->cherryWrapEnabled, _pCtConfig->cherryWrapWidth);
     show_hide_tree_lines(_pCtConfig->treeLinesVisible);
+    update_project_panel(); // refresh note shortcut names now that the note tree is available
 
     _tree_just_auto_expanded = false;
     _uCtTreeview->signal_cursor_changed().connect(sigc::mem_fun(*this, &CtMainWin::_on_treeview_cursor_changed));
@@ -1368,32 +1388,49 @@ void CtMainWin::menu_rebuild_toolbars(bool new_toolbar)
     #endif
 }
 
+void CtMainWin::update_project_panel()
+{
+    if (not _uCtTreestore) {
+        // called from the constructor before the note tree exists; window_87_init refreshes the panel later
+        return;
+    }
+    _uCtProjectPanel->set_workspace(_pCtConfig->workspaceFolders, _pCtConfig->workspaceNoteShortcuts);
+    const bool hasContent = not (_uCtProjectPanel->get_mounts().empty() and _uCtProjectPanel->get_note_shortcuts().empty());
+    _uCtProjectPanel->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
+}
+
+void CtMainWin::show_hide_right_sidebar(bool visible)
+{
+    _pCtConfig->rightSidebarVisible = visible;
+    update_project_panel();
+}
+
 void CtMainWin::config_switch_tree_side()
 {
-    auto tree_width = _scrolledwindowTree.get_width();
+    auto tree_width = _vboxTree.get_width();
     auto text_width = _vboxText.get_width();
 
 #if GTKMM_MAJOR_VERSION >= 4
     if (_pCtConfig->treeRightSide) {
         _hPaned.set_start_child(_vboxText);
-        _hPaned.set_end_child(_scrolledwindowTree);
+        _hPaned.set_end_child(_vboxTree);
         _hPaned.set_position(text_width);
     }
     else {
-        _hPaned.set_start_child(_scrolledwindowTree);
+        _hPaned.set_start_child(_vboxTree);
         _hPaned.set_end_child(_vboxText);
         _hPaned.set_position(tree_width);
     }
 #else
-    _hPaned.remove(_scrolledwindowTree);
+    _hPaned.remove(_vboxTree);
     _hPaned.remove(_vboxText);
     if (_pCtConfig->treeRightSide) {
         _hPaned.pack1(_vboxText, Gtk::EXPAND);
-        _hPaned.pack2(_scrolledwindowTree, Gtk::FILL);
+        _hPaned.pack2(_vboxTree, Gtk::FILL);
         _hPaned.property_position() = text_width;
     }
     else {
-        _hPaned.pack1(_scrolledwindowTree, Gtk::FILL);
+        _hPaned.pack1(_vboxTree, Gtk::FILL);
         _hPaned.pack2(_vboxText, Gtk::EXPAND);
         _hPaned.property_position() = tree_width;
     }

@@ -78,6 +78,11 @@ public:
     std::string                                 pickDirImg;
     std::string                                 pickDirCsv;
     std::string                                 pickDirCbox;
+    std::string                                 projectFolderPath;
+    std::vector<std::string>                    workspaceFolders;
+    std::vector<gint64>                         workspaceNoteShortcuts;
+    bool                                        rightSidebarVisible{true};
+    int                                         rightSidebarWidth{280};
     std::string                                 linkType{CtConst::LINK_TYPE_WEBS};
 #if defined(_WIN32) || defined(__APPLE__)
     // in windows when you click on the taskbar it doesn't minimise correctly with menubarInTitlebar

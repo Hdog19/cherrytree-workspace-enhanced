@@ -45,6 +45,7 @@ void CtMenu::init_actions(CtActions* pActions)
     _actions.push_back(CtMenuAction{"", "TreeMenu", None, _("_Tree"), None, None, [](){}});
     _actions.push_back(CtMenuAction{"", "ToolsMenu", None, _("Too_ls"), None, None, [](){}});
     _actions.push_back(CtMenuAction{"", "SearchMenu", None, _("_Search"), None, None, [](){}});
+    _actions.push_back(CtMenuAction{"", "ProjectMenu", None, "项目", None, None, [](){}});
     _actions.push_back(CtMenuAction{"", "ViewMenu", None, _("_View"), None, None, [](){}});
     _actions.push_back(CtMenuAction{"", "BookmarksMenu", None, _("_Bookmarks"), None, None, [](){}});
     _actions.push_back(CtMenuAction{"", "HelpMenu", None, _("_Help"), None, None, [](){}});
@@ -105,6 +106,17 @@ void CtMenu::init_actions(CtActions* pActions)
             _("Quit the Application"), sigc::mem_fun(*pActions, &CtActions::quit_or_hide_window)});
         _actions.push_back(CtMenuAction{file_cat, "exit_app", "ct_quit-app", _("E_xit CherryTree"), KB_CONTROL+KB_SHIFT+"q",
             _("Exit from CherryTree"), sigc::mem_fun(*pActions, &CtActions::quit_window)});
+    }
+    {
+        const char* project_cat = "项目";
+        _actions.push_back(CtMenuAction{project_cat, "project_bind", "ct_open", "添加挂载文件夹...", None,
+            "把真实文件夹挂载到下方工作空间", sigc::mem_fun(*pActions, &CtActions::project_bind_folder)});
+        _actions.push_back(CtMenuAction{project_cat, "project_shortcut", "ct_go-jump", "添加当前笔记快捷入口", None,
+            "在工作空间添加一个指向当前笔记的快捷入口", sigc::mem_fun(*pActions, &CtActions::project_add_note_shortcut)});
+        _actions.push_back(CtMenuAction{project_cat, "project_open_fm", "ct_open", "在文件管理器中打开挂载文件夹", None,
+            "打开第一个挂载文件夹", sigc::mem_fun(*pActions, &CtActions::project_open_in_file_manager)});
+        _actions.push_back(CtMenuAction{project_cat, "project_unbind", "ct_cancel", "清空工作空间", None,
+            "清除所有挂载文件夹和快捷入口", sigc::mem_fun(*pActions, &CtActions::project_unbind_folder)});
     }
     {
         const char* editor_cat = _("Edit/Insert");
@@ -418,6 +430,8 @@ void CtMenu::init_actions(CtActions* pActions)
         const char* view_cat = _("View");
         _actions.push_back(CtMenuAction{view_cat, "toggle_show_tree", "ct_cherries", _("Show/Hide _Tree Explorer"), "F9",
             _("Toggle Show/Hide Tree"), sigc::mem_fun(*pActions, &CtActions::toggle_show_hide_tree)});
+        _actions.push_back(CtMenuAction{view_cat, "toggle_show_sidebar", "ct_edit", "显示/隐藏工作空间侧边栏", KB_CONTROL+"b",
+            "切换显示/隐藏右侧工作空间侧边栏", sigc::mem_fun(*pActions, &CtActions::toggle_show_hide_right_sidebar)});
 #if defined(HAVE_VTE)
         _actions.push_back(CtMenuAction{view_cat, "toggle_show_vte", "ct_term", _("Show/Hide Te_rminal"), KB_CONTROL+"F9",
             _("Toggle Show/Hide Terminal"), sigc::mem_fun(*pActions, &CtActions::toggle_show_hide_vte)});

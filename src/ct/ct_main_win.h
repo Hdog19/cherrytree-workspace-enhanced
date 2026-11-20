@@ -87,6 +87,7 @@ class CtTmp;
 class CtMenu;
 class CtPrint;
 class CtStorageControl;
+class CtProjectPanel;
 
 class CtMainWin : public Gtk::ApplicationWindow
 {
@@ -230,7 +231,10 @@ public:
     #endif
     void show_hide_statusbar(bool visible)  { _ctStatusBar.hbox.property_visible() = visible; }
     void show_hide_tree_lines(bool visible) { _uCtTreeview->set_enable_tree_lines(visible); }
-    void show_hide_tree_view(bool visible)  { _scrolledwindowTree.property_visible() = visible; }
+    void show_hide_tree_view(bool visible)  { _vboxTree.property_visible() = visible; }
+    void show_hide_right_sidebar(bool visible);
+    void update_project_panel();
+    CtProjectPanel* get_project_panel() { return _uCtProjectPanel.get(); }
 
     Gtk::Widget* get_vte()        { return _pVte; }
     bool         is_vte_visible() { return _hBoxVte.property_visible(); }
@@ -377,8 +381,12 @@ private:
     std::vector<Gtk::Box*>       _gtk4Toolbars; // primary + category toolbars
     #endif /* GTKMM_MAJOR_VERSION >= 4 */
     CtMenuAction*                _pSaveMenuAction{nullptr};
+    Gtk::Box                     _vboxTree{Gtk::ORIENTATION_VERTICAL};
+    Gtk::HPaned                  _hPanedRight;            // text (left) / workspace sidebar (right), draggable divider
+    bool                         _sidebarPosInit{false};
     Gtk::ScrolledWindow          _scrolledwindowTree;
     Gtk::ScrolledWindow          _scrolledwindowText;
+    std::unique_ptr<CtProjectPanel> _uCtProjectPanel;
     std::unique_ptr<CtTreeStore> _uCtTreestore;
     std::unique_ptr<CtTreeView>  _uCtTreeview;
     CtTextView                   _ctTextview;

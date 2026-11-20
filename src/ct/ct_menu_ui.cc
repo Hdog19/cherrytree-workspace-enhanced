@@ -366,8 +366,17 @@ const char* CtMenu::_get_ui_str_menu()
     <menuitem action='toggle_show_allmatches_dlg'/>
   </menu>
 
+  <menu action='ProjectMenu'>
+    <menuitem action='project_bind'/>
+    <menuitem action='project_shortcut'/>
+    <separator/>
+    <menuitem action='project_open_fm'/>
+    <menuitem action='project_unbind'/>
+  </menu>
+
   <menu action='ViewMenu'>
     <menuitem action='toggle_show_tree'/>
+    <menuitem action='toggle_show_sidebar'/>
     <menuitem action='toggle_show_treelines'/>
     <menuitem action='toggle_show_menubar'/>
     <menuitem action='toggle_show_toolbar'/>

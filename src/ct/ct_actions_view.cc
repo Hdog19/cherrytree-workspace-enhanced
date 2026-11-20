@@ -54,6 +54,11 @@ void CtActions::toggle_show_hide_tree()
     }
 }
 
+void CtActions::toggle_show_hide_right_sidebar()
+{
+    _pCtMainWin->show_hide_right_sidebar(not _pCtConfig->rightSidebarVisible);
+}
+
 void CtActions::toggle_show_hide_menubar()
 {
     _pCtConfig->menubarVisible = not _pCtConfig->menubarVisible;

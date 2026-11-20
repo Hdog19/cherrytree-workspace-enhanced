@@ -111,6 +111,14 @@ public:
     void file_save();
     void file_vacuum();
     void file_save_as();
+
+public:
+    // project actions
+    void project_bind_folder();
+    void project_add_note_shortcut();
+    void project_unbind_folder();
+    void project_open_in_file_manager();
+    void toggle_show_hide_right_sidebar();
     void quit_or_hide_window();
     void quit_window();
     void dialog_preferences();

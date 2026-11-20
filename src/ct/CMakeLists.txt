@@ -74,6 +74,8 @@ set(CT_SHARED_FILES
   ct_table_light.cc
   ct_treestore.cc
   ct_widgets.cc
+  ct_project_panel.cc
+  ct_actions_project.cc
   ct_text_view.cc
   ct_parser_text.cc
   ct_parser_md.cc

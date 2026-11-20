@@ -915,7 +915,12 @@ void CtMenu::_walk_menu_xml(Gtk::MenuShell* pMenuShell, xmlpp::Node* pNode)
                 _walk_menu_xml(pSubmenu, pNodeIter->get_first_child());
             }
             else { // otherwise it is an action id
-                CtMenuAction const* pAction = find_action(get_attribute(pNodeIter, "action")->get_value());
+                xmlpp::Attribute* pAttrAction = get_attribute(pNodeIter, "action");
+                CtMenuAction const* pAction = pAttrAction ? find_action(pAttrAction->get_value()) : nullptr;
+                if (not pAction) {
+                    spdlog::warn("CtMenu: unknown menu id {} in menubar xml", pAttrAction ? pAttrAction->get_value() : "(no action attr)");
+                    continue;
+                }
                 Gtk::Menu* pSubmenu = _add_menu_submenu(pMenuShell, pAction->id.c_str(), pAction->name.c_str(), pAction->image.c_str());
                 _walk_menu_xml(pSubmenu, pNodeIter->get_first_child());
             }
