@@ -194,14 +194,24 @@ void CtProjectPanel::_populate_root()
         return;
     }
 
-    // remember expanded folders to restore them after the rescan
-    std::set<std::string> expandedPaths;
-    for (auto& row : _rTreeStore->children()) {
-        Gtk::TreeModel::Path path = _rTreeStore->get_path(row);
-        if (_treeView.row_expanded(path)) {
-            expandedPaths.insert(row[_columns.colPath]);
-        }
-    }
+    // remember expanded folders (recursively) to restore them after the rescan
+    std::vector<std::string> expandedPathStrings;
+    std::function<void(const Gtk::TreeModel::Children&)> collectExpanded =
+        [&](const Gtk::TreeModel::Children& children) {
+            for (auto& row : children) {
+                Gtk::TreeModel::Path path = _rTreeStore->get_path(row);
+                if (_treeView.row_expanded(path)) {
+                    expandedPathStrings.push_back(path.to_string());
+                    collectExpanded(row.children());
+                }
+            }
+        };
+    collectExpanded(_rTreeStore->children());
+    // shallow paths first, so lazy population fills ancestors before nested paths are expanded
+    std::sort(expandedPathStrings.begin(), expandedPathStrings.end(),
+              [](const std::string& a, const std::string& b) {
+                  return std::count(a.begin(), a.end(), ':') < std::count(b.begin(), b.end(), ':');
+              });
 
     _rTreeStore->clear();
 
@@ -248,12 +258,9 @@ void CtProjectPanel::_populate_root()
         }
     }
 
-    // restore expansion
-    for (auto& row : _rTreeStore->children()) {
-        const int kind = row[_columns.colKind];
-        if (KindFs == kind and expandedPaths.count(row[_columns.colPath])) {
-            _treeView.expand_row(_rTreeStore->get_path(row), false);
-        }
+    // restore expansion (in path order collected above)
+    for (const std::string& pathStr : expandedPathStrings) {
+        _treeView.expand_row(Gtk::TreeModel::Path(pathStr), false);
     }
 }
 
