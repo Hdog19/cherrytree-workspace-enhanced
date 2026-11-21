@@ -141,16 +141,7 @@ void CtProjectPanel::attach_to_doc(const std::string& docFilePath)
     catch (const std::exception&) {
         // malformed numbers etc. fall through
     }
-    // no sidecar yet: one-time migration from the old global config, otherwise keep session state
-    CtConfig* pConfig = _pCtMainWin->get_ct_config();
-    if (not pConfig->workspaceFolders.empty() or not pConfig->workspaceNoteShortcuts.empty()) {
-        set_workspace(pConfig->workspaceFolders, pConfig->workspaceNoteShortcuts);
-        _persist(); // write the sidecar right away so this document owns the workspace
-        pConfig->workspaceFolders.clear();
-        pConfig->workspaceNoteShortcuts.clear(); // avoid seeding other documents with the same global list
-        return;
-    }
-    // keep the session state (e.g. built before this doc was saved) and take ownership of it now
+    // no sidecar: this document has no workspace yet (keep session state, e.g. built before the doc was saved)
     if (not _mountFolders.empty() or not _noteShortcutIds.empty()) {
         _persist();
     }
