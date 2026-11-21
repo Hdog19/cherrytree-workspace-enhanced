@@ -15,9 +15,12 @@
 #pragma once
 
 #include <gtkmm.h>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace stdfs = std::filesystem;
 
 class CtMainWin;
 
@@ -52,10 +55,26 @@ protected:
     void        _fill_props(const std::string& filePath);
     void        _on_list_cursor_changed();
     void        _on_list_row_activated(const Gtk::TreeModel::Path& path, Gtk::TreeViewColumn* column);
+    bool        _on_list_button_press(GdkEventButton* pEvent);
+    bool        _on_list_key_press(GdkEventKey* pEvent);
+    void        _show_list_menu(GdkEventButton* pEvent, const std::vector<std::string>& selPaths);
+    void        _show_details(const Gtk::TreeModel::Row& row);
+    void        _clear_details();
+    void        _refresh_current();
     void        _on_back_clicked();
     void        _go_up();
     void        _switch_list();
     void        _switch_props();
+    // file operations (explorer-like context menu)
+    void        _do_new_folder();
+    void        _do_new_file();
+    void        _do_copy(bool cut);
+    void        _do_paste();
+    void        _do_rename(const std::string& srcPath);
+    void        _do_delete(const std::vector<std::string>& paths);
+    void        _open_in_powershell(const std::string& dirPath);
+    Glib::ustring _entry_dialog(const Glib::ustring& title, const Glib::ustring& defaultText);
+    static void _copy_recursive(const stdfs::path& src, const stdfs::path& dst);
     static Glib::ustring _format_size(guint64 bytes);
     static Glib::ustring _format_time(std::time_t t);
     static Glib::ustring _get_mtime_str(const std::string& path);
@@ -85,4 +104,8 @@ protected:
     bool            _currIsDir{true};
     std::vector<std::string> _navHistory;
     bool            _filling{false};
+    // explorer-like state
+    Gtk::Label      _detailsLabel;  // bottom strip: info of the selected entry
+    std::vector<std::string> _clipPaths;
+    bool            _clipCut{false};
 };

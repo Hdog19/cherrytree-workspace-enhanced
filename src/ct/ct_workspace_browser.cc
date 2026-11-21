@@ -12,11 +12,13 @@
 #include "ct_workspace_browser.h"
 #include "ct_main_win.h"
 #include "ct_filesystem.h"
+#include "ct_dialogs.h"
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 
 namespace stdfs = std::filesystem;
 
@@ -66,6 +68,12 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
     pScrolledList->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     _listView.signal_cursor_changed().connect(sigc::mem_fun(*this, &CtWorkspaceBrowser::_on_list_cursor_changed));
     _listView.signal_row_activated().connect(sigc::mem_fun(*this, &CtWorkspaceBrowser::_on_list_row_activated));
+#if GTKMM_MAJOR_VERSION < 4
+    _listView.signal_button_press_event().connect(
+        [this](GdkEventButton* pEvent) { return _on_list_button_press(pEvent); }, false);
+    _listView.signal_key_press_event().connect(
+        [this](GdkEventKey* pEvent) { return _on_list_key_press(pEvent); }, false);
+#endif
 
     // properties page
     Gtk::Box* pPropsBox = Gtk::manage(new Gtk::Box{Gtk::ORIENTATION_VERTICAL, 8});
@@ -133,6 +141,22 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
     _pages.add(*pPropsBox, "props");
     pack_start(_navBar, Gtk::PACK_SHRINK);
     pack_start(_pages);
+    // bottom details strip for the selected entry (explorer-like)
+    Gtk::Separator* pDetailsSeparator = Gtk::manage(new Gtk::Separator{});
+    pack_start(*pDetailsSeparator, Gtk::PACK_SHRINK);
+    pack_end(_detailsLabel, Gtk::PACK_SHRINK);
+#endif
+#if GTKMM_MAJOR_VERSION >= 4
+    append(_detailsLabel);
+#endif
+    _detailsLabel.set_halign(Gtk::ALIGN_START);
+    _detailsLabel.set_ellipsize(Pango::ELLIPSIZE_END);
+#if GTKMM_MAJOR_VERSION >= 4
+    _detailsLabel.set_margin_start(6); _detailsLabel.set_margin_end(6);
+    _detailsLabel.set_margin_top(3); _detailsLabel.set_margin_bottom(3);
+#else
+    _detailsLabel.set_margin_left(6); _detailsLabel.set_margin_right(6);
+    _detailsLabel.set_margin_top(3); _detailsLabel.set_margin_bottom(3);
 #endif
     _pages.set_visible_child("list");
 }
@@ -280,28 +304,354 @@ void CtWorkspaceBrowser::_on_list_cursor_changed()
     Gtk::TreeViewColumn* pColumn{nullptr};
     _listView.get_cursor(path, pColumn);
     if (not path) {
+        _clear_details();
         return;
     }
     Gtk::TreeModel::iterator iter = _rListStore->get_iter(path);
     if (not iter) {
+        _clear_details();
         return;
     }
-    Gtk::TreeModel::Row row = *iter;
-    const std::string entryPath = row[_columns.colPath];
-    if (entryPath.empty()) {
-        return;
+    // explorer-like: selection only, info shown in the bottom strip; the view does not change
+    _show_details(*iter);
+}
+
+bool CtWorkspaceBrowser::_on_list_button_press(GdkEventButton* pEvent)
+{
+    Gtk::TreeModel::Path path;
+    Gtk::TreeViewColumn* pColumn{nullptr};
+    int cellX{0}, cellY{0};
+    const bool hitRow = _listView.get_path_at_pos((int)pEvent->x, (int)pEvent->y, path, pColumn, cellX, cellY);
+    if (pEvent->type == GDK_BUTTON_PRESS and 1 == pEvent->button and not hitRow) {
+        // clicking the blank area only clears the selection (explorer-like)
+        _listView.get_selection()->unselect_all();
+        _clear_details();
+        return false;
     }
-    if (row[_columns.colIsDir]) {
-        _navigate(entryPath, true, true); // click a folder inside the list: drill down
+    if (pEvent->type == GDK_BUTTON_PRESS and 3 == pEvent->button) {
+        std::vector<std::string> selPaths;
+        if (hitRow) {
+            _listView.set_cursor(path);
+            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(path)) {
+                Gtk::TreeModel::Row row = *iter;
+                if (not ((std::string)row[_columns.colPath]).empty()) {
+                    selPaths.push_back(row[_columns.colPath]);
+                }
+            }
+        }
+        else {
+            _listView.get_selection()->unselect_all();
+            _clear_details();
+        }
+        _show_list_menu(pEvent, selPaths);
+        return true;
+    }
+    return false;
+}
+
+bool CtWorkspaceBrowser::_on_list_key_press(GdkEventKey* pEvent)
+{
+    const guint keyval = pEvent->keyval;
+    const guint state = pEvent->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_MOD1_MASK);
+    if (keyval == GDK_KEY_F2) {
+        const auto sel = _listView.get_selection()->get_selected_rows();
+        if (sel.size() == 1) {
+            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(sel[0])) {
+                _do_rename((*iter)[_columns.colPath]);
+            }
+        }
+        return true;
+    }
+    if (keyval == GDK_KEY_Delete) {
+        std::vector<std::string> paths;
+        for (const auto& row : _listView.get_selection()->get_selected_rows()) {
+            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
+                paths.push_back((*iter)[_columns.colPath]);
+            }
+        }
+        _do_delete(paths);
+        return true;
+    }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_c) { _do_copy(false); return true; }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_x) { _do_copy(true); return true; }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_v) { _do_paste(); return true; }
+    return false;
+}
+
+void CtWorkspaceBrowser::_show_details(const Gtk::TreeModel::Row& row)
+{
+    const Glib::ustring size = row[_columns.colSize];
+    const Glib::ustring mtime = row[_columns.colMTime];
+    _detailsLabel.set_text(Glib::ustring::compose("%1　类型：%2　大小：%3　修改：%4",
+        Glib::ustring{row[_columns.colName]},
+        Glib::ustring{row[_columns.colType]},
+        size.empty() ? Glib::ustring{"—"} : size,
+        mtime.empty() ? Glib::ustring{"—"} : mtime));
+}
+
+void CtWorkspaceBrowser::_clear_details()
+{
+    _detailsLabel.set_text("");
+}
+
+void CtWorkspaceBrowser::_refresh_current()
+{
+    if (_currIsDir and not _currPath.empty()) {
+        _fill_dir(_currPath);
+    }
+}
+
+void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vector<std::string>& selPaths)
+{
+    Gtk::Menu* pMenu = Gtk::manage(new Gtk::Menu{});
+    auto addMenuItem = [pMenu](const char* label, std::function<void()> slot) {
+        Gtk::MenuItem* pMenuItem = Gtk::manage(new Gtk::MenuItem{label, true});
+        pMenuItem->signal_activate().connect(slot);
+        pMenu->append(*pMenuItem);
+    };
+    auto addSeparator = [pMenu]() {
+        Gtk::SeparatorMenuItem* pSep = Gtk::manage(new Gtk::SeparatorMenuItem{});
+        pMenu->append(*pSep);
+    };
+
+    if (selPaths.empty()) {
+        // blank area: workspace-level actions
+        addMenuItem("新建文件夹", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_new_folder));
+        addMenuItem("新建文本文件", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_new_file));
+        if (not _clipPaths.empty()) {
+            addSeparator();
+            addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_paste));
+        }
+        addSeparator();
+        addMenuItem("在 PowerShell 中打开", [this]() { _open_in_powershell(_currPath); });
+        addMenuItem("刷新", sigc::mem_fun(*this, &CtWorkspaceBrowser::_refresh_current));
     }
     else {
-        _navigate(entryPath, false, true); // click a file: show its properties
+        const std::string selPath = selPaths[0];
+        const bool selIsDir = Glib::file_test(selPath, Glib::FILE_TEST_IS_DIR);
+        addMenuItem("打开（系统默认程序）", [this, selPath]() {
+            if (Glib::file_test(selPath, Glib::FILE_TEST_IS_DIR)) {
+                fs::open_folderpath(fs::path{selPath}, _pCtMainWin->get_ct_config());
+            }
+            else {
+                fs::open_filepath(fs::path{selPath}, false, _pCtMainWin->get_ct_config());
+            }
+        });
+        if (selIsDir) {
+            addMenuItem("在此打开 PowerShell", [this, selPath]() { _open_in_powershell(selPath); });
+        }
+        else {
+            addMenuItem("在 PowerShell 中打开所在文件夹", [this, selPath]() {
+                _open_in_powershell(stdfs::path{selPath}.parent_path().string());
+            });
+        }
+        addMenuItem("复制路径", [this, selPath]() {
+            Gtk::Clipboard::get()->set_text(selPath);
+        });
+        addSeparator();
+        addMenuItem("剪切", [this]() { _do_copy(true); });
+        addMenuItem("复制", [this]() { _do_copy(false); });
+        if (not _clipPaths.empty()) {
+            addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_paste));
+        }
+        addMenuItem("重命名（F2）", [this, selPath]() { _do_rename(selPath); });
+        addSeparator();
+        addMenuItem("删除（Del）", [this, selPaths]() { _do_delete(selPaths); });
+        addMenuItem("刷新", sigc::mem_fun(*this, &CtWorkspaceBrowser::_refresh_current));
     }
+
+    pMenu->show_all();
+#if GTKMM_MAJOR_VERSION >= 4
+    pMenu->popup();
+#else
+    pMenu->popup_at_pointer(reinterpret_cast<const GdkEvent*>(pEvent));
+#endif
+}
+
+void CtWorkspaceBrowser::_do_new_folder()
+{
+    const Glib::ustring name = _entry_dialog("新建文件夹", "新建文件夹");
+    if (name.empty()) {
+        return;
+    }
+    std::error_code ec;
+    stdfs::create_directories(stdfs::path{_currPath} / stdfs::path{name.raw()}, ec);
+    if (ec) {
+        spdlog::warn("cannot create folder {}: {}", name.raw(), ec.message());
+        return;
+    }
+    _refresh_current();
+}
+
+void CtWorkspaceBrowser::_do_new_file()
+{
+    const Glib::ustring name = _entry_dialog("新建文本文件", "新建文本文件.txt");
+    if (name.empty()) {
+        return;
+    }
+    const stdfs::path newPath = stdfs::path{_currPath} / stdfs::path{name.raw()};
+    {
+        std::ofstream ofs{newPath, std::ios::app};
+    }
+    _refresh_current();
+}
+
+void CtWorkspaceBrowser::_do_copy(bool cut)
+{
+    _clipPaths.clear();
+    for (const auto& row : _listView.get_selection()->get_selected_rows()) {
+        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
+            _clipPaths.push_back((*iter)[_columns.colPath]);
+        }
+    }
+    _clipCut = cut;
+}
+
+void CtWorkspaceBrowser::_do_paste()
+{
+    if (_clipPaths.empty() or not _currIsDir or _currPath.empty()) {
+        return;
+    }
+    const stdfs::path destDir{_currPath};
+    for (const std::string& srcStr : _clipPaths) {
+        const stdfs::path src{srcStr};
+        const stdfs::path dest = destDir / src.filename();
+        if (stdfs::equivalent(src, dest)) {
+            continue;
+        }
+        std::error_code ec;
+        if (_clipCut) {
+            stdfs::rename(src, dest, ec);
+            if (ec) {
+                // cross-drive move: copy then remove
+                _copy_recursive(src, dest);
+                stdfs::remove_all(src, ec);
+            }
+        }
+        else if (stdfs::is_directory(src)) {
+            _copy_recursive(src, dest);
+        }
+        else {
+            stdfs::copy_file(src, dest, stdfs::copy_options::overwrite_existing, ec);
+        }
+    }
+    if (_clipCut) {
+        _clipPaths.clear();
+        _clipCut = false;
+    }
+    _refresh_current();
+}
+
+void CtWorkspaceBrowser::_do_rename(const std::string& srcPath)
+{
+    const stdfs::path src{srcPath};
+    const Glib::ustring name = _entry_dialog("重命名", Glib::path_get_basename(srcPath));
+    if (name.empty() or name == Glib::path_get_basename(srcPath)) {
+        return;
+    }
+    std::error_code ec;
+    stdfs::rename(src, src.parent_path() / stdfs::path{name.raw()}, ec);
+    if (ec) {
+        spdlog::warn("cannot rename {}: {}", srcPath, ec.message());
+        return;
+    }
+    _refresh_current();
+}
+
+void CtWorkspaceBrowser::_do_delete(const std::vector<std::string>& paths)
+{
+    if (paths.empty()) {
+        return;
+    }
+    if (not CtDialogs::question_dialog(
+            Glib::ustring::compose("确定删除 %1 个项目吗？此操作不可恢复！",
+                                   Glib::ustring{std::to_string(paths.size())}), *_pCtMainWin)) {
+        return;
+    }
+    for (const std::string& path : paths) {
+        std::error_code ec;
+        stdfs::remove_all(stdfs::path{path}, ec);
+        if (ec) {
+            spdlog::warn("cannot delete {}: {}", path, ec.message());
+        }
+    }
+    _refresh_current();
+}
+
+void CtWorkspaceBrowser::_copy_recursive(const stdfs::path& src, const stdfs::path& dst)
+{
+    std::error_code ec;
+    stdfs::create_directories(dst, ec);
+    for (const stdfs::directory_entry& entry : stdfs::directory_iterator(src)) {
+        const stdfs::path destEntry = dst / entry.path().filename();
+        if (entry.is_directory()) {
+            _copy_recursive(entry.path(), destEntry);
+        }
+        else {
+            stdfs::copy_file(entry.path(), destEntry, stdfs::copy_options::overwrite_existing, ec);
+        }
+    }
+}
+
+void CtWorkspaceBrowser::_open_in_powershell(const std::string& dirPath)
+{
+    if (dirPath.empty()) {
+        return;
+    }
+    Glib::ustring psPath = dirPath;
+    // escape single quotes for the PowerShell single-quoted literal
+    Glib::ustring safePath;
+    for (gunichar ch : psPath) {
+        safePath += (ch == '\'' ? Glib::ustring{"''"} : Glib::ustring(1, ch));
+    }
+    try {
+        Glib::spawn_command_line_async(Glib::ustring::compose(
+            "powershell -NoExit -Command \"Set-Location -LiteralPath '%1'\"", safePath));
+    }
+    catch (const Glib::Error& e) {
+        spdlog::warn("cannot start powershell: {}", e.what().raw());
+    }
+}
+
+Glib::ustring CtWorkspaceBrowser::_entry_dialog(const Glib::ustring& title, const Glib::ustring& defaultText)
+{
+#if GTKMM_MAJOR_VERSION >= 4
+    Gtk::Dialog dialog{title, true};
+    dialog.set_transient_for(*_pCtMainWin);
+    Gtk::Entry entry;
+    entry.set_text(defaultText);
+    entry.select_region(0, (int)defaultText.raw().size());
+    dialog.set_child(entry);
+    dialog.add_button("确定", Gtk::RESPONSE_OK);
+    dialog.add_button("取消", Gtk::RESPONSE_CANCEL);
+    dialog.set_default_response(Gtk::RESPONSE_OK);
+    entry.signal_activate().connect([&]() { dialog.response(Gtk::RESPONSE_OK); });
+    if (dialog.run() != Gtk::RESPONSE_OK) {
+        return {};
+    }
+    return entry.get_text();
+#else
+    Gtk::Dialog dialog{title, *_pCtMainWin, Gtk::DIALOG_MODAL};
+    dialog.add_button("确定", Gtk::RESPONSE_OK);
+    dialog.add_button("取消", Gtk::RESPONSE_CANCEL);
+    dialog.set_default_response(Gtk::RESPONSE_OK);
+    dialog.set_border_width(10);
+    Gtk::Entry entry;
+    entry.set_text(defaultText);
+    entry.select_region(0, (int)defaultText.raw().size());
+    dialog.get_content_area()->pack_start(entry, Gtk::PACK_SHRINK);
+    entry.signal_activate().connect([&]() { dialog.response(Gtk::RESPONSE_OK); });
+    dialog.show_all_children();
+    if (dialog.run() != Gtk::RESPONSE_OK) {
+        return {};
+    }
+    return entry.get_text();
+#endif
 }
 
 void CtWorkspaceBrowser::_on_list_row_activated(const Gtk::TreeModel::Path& path, Gtk::TreeViewColumn* /*column*/)
 {
-    // double click: open externally (like explorer)
+    // double click: drill into a folder, open a file externally (like explorer)
     Gtk::TreeModel::iterator iter = _rListStore->get_iter(path);
     if (not iter) {
         return;
@@ -312,7 +662,7 @@ void CtWorkspaceBrowser::_on_list_row_activated(const Gtk::TreeModel::Path& path
         return;
     }
     if (row[_columns.colIsDir]) {
-        fs::open_folderpath(fs::path{entryPath}, _pCtMainWin->get_ct_config());
+        _navigate(entryPath, true, true);
     }
     else {
         fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
