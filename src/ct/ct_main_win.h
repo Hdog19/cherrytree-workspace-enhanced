@@ -237,9 +237,8 @@ public:
     void update_project_panel();
     CtProjectPanel* get_project_panel() { return _uCtProjectPanel.get(); }
     CtWorkspaceBrowser* get_workspace_browser() { return _uCtWorkspaceBrowser.get(); }
-    // edit-area view switching: workspace browsing vs note editing
-    void show_workspace_entry_in_editor(const std::string& path, bool isDir);
-    void show_text_editor_view();
+    // workspace panel -> lower-area browser (the note editor above stays untouched)
+    void show_workspace_entry(const std::string& path, bool isDir);
 
     Gtk::Widget* get_vte()        { return _pVte; }
     bool         is_vte_visible() { return _hBoxVte.property_visible(); }
@@ -387,13 +386,15 @@ private:
     #endif /* GTKMM_MAJOR_VERSION >= 4 */
     CtMenuAction*                _pSaveMenuAction{nullptr};
     Gtk::Box                     _vboxTree{Gtk::ORIENTATION_VERTICAL};
-    Gtk::HPaned                  _hPanedRight;            // text (left) / workspace sidebar (right), draggable divider
     bool                         _sidebarPosInit{false};
+    bool                         _lowerAreaPosInit{false};
     Gtk::ScrolledWindow          _scrolledwindowTree;
     Gtk::ScrolledWindow          _scrolledwindowText;
     std::unique_ptr<CtProjectPanel> _uCtProjectPanel;
     std::unique_ptr<CtWorkspaceBrowser> _uCtWorkspaceBrowser;
-    Gtk::Stack*                  _pEditAreaStack{nullptr}; // owns scrolledwindowText + workspace browser
+    // main layout: upper half = note tree + note editor, lower half = workspace panel + workspace browser
+    Gtk::VPaned                  _vPanedMain;
+    Gtk::HPaned                  _hPanedLower;            // workspace panel (left) / workspace browser (right), draggable divider
     std::unique_ptr<CtTreeStore> _uCtTreestore;
     std::unique_ptr<CtTreeView>  _uCtTreeview;
     CtTextView                   _ctTextview;

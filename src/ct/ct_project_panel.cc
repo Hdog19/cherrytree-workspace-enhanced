@@ -78,7 +78,7 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         if (KindFs != (int)row[_columns.colKind] or row[_columns.colDummy] or entryPath.empty()) {
             return;
         }
-        _pCtMainWin->show_workspace_entry_in_editor(entryPath, (bool)row[_columns.colIsDir]);
+        _pCtMainWin->show_workspace_entry(entryPath, (bool)row[_columns.colIsDir]);
     }));
 
     Gtk::ScrolledWindow* pScrolledWindow = Gtk::manage(new Gtk::ScrolledWindow{});

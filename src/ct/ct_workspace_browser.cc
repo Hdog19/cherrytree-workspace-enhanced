@@ -159,6 +159,7 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
     _detailsLabel.set_margin_top(3); _detailsLabel.set_margin_bottom(3);
 #endif
     _pages.set_visible_child("list");
+    _pathLabel.set_text("在左侧工作空间中选择一个文件或文件夹");
 }
 
 CtWorkspaceBrowser::~CtWorkspaceBrowser() = default;

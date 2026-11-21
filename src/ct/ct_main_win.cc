@@ -157,30 +157,37 @@ CtMainWin::CtMainWin(bool                            no_gui,
     _scrolledwindowTree.get_style_context()->add_class("ct-tree-scroll-panel");
     _scrolledwindowText.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     _uCtProjectPanel.reset(new CtProjectPanel{this});
-    // first time the workspace sidebar is mapped (shown), reserve its configured width on the right
+    // first time the workspace panel is mapped (shown), reserve its configured width
+    // and give the lower half half of the vertical space
     _uCtProjectPanel->signal_map().connect([this]() {
         if (not _sidebarPosInit) {
             _sidebarPosInit = true;
-            const int width = _hPanedRight.get_width();
+            const int width = _hPanedLower.get_width();
             if (width > 0) {
-                _hPanedRight.set_position(std::max(width - _pCtConfig->rightSidebarWidth, width / 2));
+                // workspace panel at least 240px, browser keeps at least 200px
+                const int panelWidth = std::min(std::max(240, width - _pCtConfig->rightSidebarWidth), width - 200);
+                if (panelWidth > 0) {
+                    _hPanedLower.set_position(panelWidth);
+                }
             }
+        }
+        if (not _lowerAreaPosInit) {
+            _lowerAreaPosInit = true;
+            Glib::signal_idle().connect([this]() -> bool {
+                const int height = _vPanedMain.get_height();
+                if (height > 0) {
+                    _vPanedMain.set_position(height / 2);
+                }
+                return false;
+            });
         }
     });
 #if GTKMM_MAJOR_VERSION >= 4
     _scrolledwindowText.set_child(_ctTextview.mm());
-    // edit area: a stack holding the note editor and the workspace browser
-    _pEditAreaStack = Gtk::manage(new Gtk::Stack{});
-    _pEditAreaStack->set_hexpand(true);
-    _pEditAreaStack->set_vexpand(true);
-    _pEditAreaStack->add(_scrolledwindowText, "editor");
     _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
-    _pEditAreaStack->add(*_uCtWorkspaceBrowser, "browser");
+    // upper half: note tree + note editor
     _vboxText.append(_init_window_header());
-    _hPanedRight.set_start_child(*_pEditAreaStack);
-    _hPanedRight.set_end_child(*_uCtProjectPanel);
-    _hPanedRight.set_expand(true);
-    _vboxText.append(_hPanedRight);
+    _vboxText.append(_scrolledwindowText);
     _vboxText.set_expand(true);
     _vboxTree.append(_scrolledwindowTree);
     _scrolledwindowTree.set_expand(true);
@@ -193,18 +200,20 @@ CtMainWin::CtMainWin(bool                            no_gui,
         _hPaned.set_end_child(_vboxText);
     }
     _hPaned.set_expand(true);
-    _vPaned.set_start_child(_hPaned);
+    // lower half: workspace panel + its explorer-like browser, side by side
+    _hPanedLower.set_start_child(*_uCtProjectPanel);
+    _hPanedLower.set_end_child(*_uCtWorkspaceBrowser);
+    _hPanedLower.set_expand(true);
+    _vPanedMain.set_start_child(_hPaned);
+    _vPanedMain.set_end_child(_hPanedLower);
+    _vPanedMain.set_expand(true);
+    _vPaned.set_start_child(_vPanedMain);
 #else
     _scrolledwindowText.add(_ctTextview.mm());
-    // edit area: a stack holding the note editor and the workspace browser
-    _pEditAreaStack = Gtk::manage(new Gtk::Stack{});
-    _pEditAreaStack->add(_scrolledwindowText, "editor");
     _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
-    _pEditAreaStack->add(*_uCtWorkspaceBrowser, "browser");
-    _hPanedRight.pack1(*_pEditAreaStack, Gtk::EXPAND);
-    _hPanedRight.pack2(*_uCtProjectPanel, Gtk::FILL);
+    // upper half: note tree + note editor
     _vboxText.pack_start(_init_window_header(), false, false);
-    _vboxText.pack_start(_hPanedRight);
+    _vboxText.pack_start(_scrolledwindowText);
     _vboxTree.pack_start(_scrolledwindowTree, Gtk::PACK_EXPAND_WIDGET);
     if (_pCtConfig->treeRightSide) {
         _hPaned.pack1(_vboxText, Gtk::EXPAND);
@@ -214,7 +223,12 @@ CtMainWin::CtMainWin(bool                            no_gui,
         _hPaned.pack1(_vboxTree, Gtk::FILL);
         _hPaned.pack2(_vboxText, Gtk::EXPAND);
     }
-    _vPaned.pack1(_hPaned, Gtk::EXPAND);
+    // lower half: workspace panel + its explorer-like browser, side by side
+    _hPanedLower.pack1(*_uCtProjectPanel, Gtk::FILL);
+    _hPanedLower.pack2(*_uCtWorkspaceBrowser, Gtk::EXPAND);
+    _vPanedMain.pack1(_hPaned, Gtk::EXPAND);
+    _vPanedMain.pack2(_hPanedLower, Gtk::FILL);
+    _vPaned.pack1(_vPanedMain, Gtk::EXPAND);
 #endif
     _hPaned.property_wide_handle() = true;
     update_project_panel();
@@ -1412,23 +1426,15 @@ void CtMainWin::update_project_panel()
     _uCtProjectPanel->attach_to_doc(docPath);
     const bool hasContent = not (_uCtProjectPanel->get_mounts().empty() and _uCtProjectPanel->get_note_shortcuts().empty());
     _uCtProjectPanel->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
+    // hide the whole lower half when there is no workspace to browse
+    _hPanedLower.set_visible(hasContent and _pCtConfig->rightSidebarVisible);
 }
 
-void CtMainWin::show_workspace_entry_in_editor(const std::string& path, bool isDir)
+void CtMainWin::show_workspace_entry(const std::string& path, bool isDir)
 {
-    if (not _pEditAreaStack or not _uCtWorkspaceBrowser) {
-        return;
+    if (_uCtWorkspaceBrowser) {
+        _uCtWorkspaceBrowser->browse_path(path, isDir);
     }
-    _uCtWorkspaceBrowser->browse_path(path, isDir);
-    _pEditAreaStack->set_visible_child("browser");
-}
-
-void CtMainWin::show_text_editor_view()
-{
-    if (not _pEditAreaStack) {
-        return;
-    }
-    _pEditAreaStack->set_visible_child("editor");
 }
 
 void CtMainWin::show_hide_right_sidebar(bool visible)
