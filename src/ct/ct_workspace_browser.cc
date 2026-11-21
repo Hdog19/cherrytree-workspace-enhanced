@@ -332,6 +332,8 @@ bool CtWorkspaceBrowser::_on_list_button_press(GdkEventButton* pEvent)
         std::vector<std::string> selPaths;
         if (hitRow) {
             _listView.set_cursor(path);
+            // right-click must also select the row: the copy/cut actions rely on it
+            _listView.get_selection()->select(path);
             if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(path)) {
                 Gtk::TreeModel::Row row = *iter;
                 if (not ((std::string)row[_columns.colPath]).empty()) {
@@ -440,8 +442,8 @@ void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vect
     addMenuItem("新建文件夹", [this]() { new_folder_in(_currPath); });
     addMenuItem("新建文本文件", [this]() { new_file_in(_currPath); });
     addSeparator();
-    addMenuItem("剪切", [this]() { _do_copy(true); }, hasSel);
-    addMenuItem("复制", [this]() { _do_copy(false); }, hasSel);
+    addMenuItem("剪切", [this, selPaths]() { set_file_clipboard(selPaths, true); }, hasSel);
+    addMenuItem("复制", [this, selPaths]() { set_file_clipboard(selPaths, false); }, hasSel);
     // "粘贴" is always present and usable, on nodes and on the blank area alike;
     // paste_into() falls back to files copied in Windows Explorer
     addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）",
@@ -496,6 +498,17 @@ void CtWorkspaceBrowser::_do_copy(bool cut)
     for (const auto& row : _listView.get_selection()->get_selected_rows()) {
         if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
             paths.push_back((*iter)[_columns.colPath]);
+        }
+    }
+    if (paths.empty()) {
+        // keyboard shortcut: fall back to the row under the cursor
+        Gtk::TreeModel::Path cursorPath;
+        Gtk::TreeViewColumn* pColumn{nullptr};
+        _listView.get_cursor(cursorPath, pColumn);
+        if (cursorPath) {
+            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(cursorPath)) {
+                paths.push_back((*iter)[_columns.colPath]);
+            }
         }
     }
     set_file_clipboard(paths, cut);
@@ -580,11 +593,12 @@ void CtWorkspaceBrowser::paste_into(const std::string& destDir)
     std::vector<std::string> srcPaths = _clipPaths;
     const bool cut = _clipCut;
     if (srcPaths.empty()) {
-        // support files copied in Windows Explorer (text/uri-list on the system clipboard)
+        // files copied in Windows Explorer (CF_HDROP) or in a GTK app (text/uri-list)
         srcPaths = _system_clipboard_files();
     }
+    spdlog::debug("workspace paste: {} internal / {} clipboard file(s)", _clipPaths.size(), srcPaths.size());
     if (srcPaths.empty()) {
-        CtDialogs::warning_dialog("剪贴板中没有可粘贴的文件", *_pCtMainWin);
+        CtDialogs::warning_dialog("剪贴板中没有可粘贴的文件。\n可先在文件/文件夹上右键「复制」，或在 Windows 资源管理器中复制文件后再粘贴。", *_pCtMainWin);
         return;
     }
     const stdfs::path destDirPath{destDir};
@@ -634,23 +648,56 @@ std::vector<std::string> CtWorkspaceBrowser::_system_clipboard_files()
     if (not pClipboard) {
         return paths;
     }
-    GtkSelectionData* pData = gtk_clipboard_wait_for_contents(
-        pClipboard, gdk_atom_intern("text/uri-list", FALSE));
-    if (not pData) {
-        return paths;
-    }
-    gchar** uris = gtk_selection_data_get_uris(pData);
-    if (uris) {
-        for (gchar** pUri = uris; *pUri; ++pUri) {
-            gchar* filename = g_filename_from_uri(*pUri, nullptr, nullptr);
-            if (filename) {
-                paths.emplace_back(filename);
-                g_free(filename);
+#ifdef _WIN32
+    // Windows Explorer exposes copied files as CF_HDROP (a raw DROPFILES structure),
+    // NOT as "text/uri-list" -- same target as Cherrytree's own clipboard handling.
+    GtkSelectionData* pHdrop = gtk_clipboard_wait_for_contents(
+        pClipboard, gdk_atom_intern("CF_HDROP", FALSE));
+    if (pHdrop) {
+        const guint8* data = gtk_selection_data_get_data(pHdrop);
+        const gint len = gtk_selection_data_get_length(pHdrop);
+        if (data and len >= 20) {
+            // first DWORD of DROPFILES = byte offset of the UTF-16LE, double-NUL terminated file list
+            const guint32 offset = *reinterpret_cast<const guint32*>(data);
+            if (offset < static_cast<guint32>(len)) {
+                const wchar_t* pStr = reinterpret_cast<const wchar_t*>(data + offset);
+                const guint8* pEnd = data + len;
+                while (reinterpret_cast<const guint8*>(pStr) < pEnd and *pStr != L'\0') {
+                    const std::wstring wpath{pStr};
+                    try {
+                        const Glib::ustring utf8 = Glib::convert(
+                            std::string{reinterpret_cast<const char*>(wpath.c_str()),
+                                        wpath.size() * sizeof(wchar_t)},
+                            "UTF-8", "UTF-16LE");
+                        paths.push_back(utf8.raw());
+                    }
+                    catch (const Glib::Error&) {}
+                    pStr += wpath.size() + 1;
+                }
             }
         }
-        g_strfreev(uris);
+        gtk_selection_data_free(pHdrop);
     }
-    gtk_selection_data_free(pData);
+#endif
+    if (paths.empty()) {
+        // GTK applications expose file lists as text/uri-list
+        GtkSelectionData* pData = gtk_clipboard_wait_for_contents(
+            pClipboard, gdk_atom_intern("text/uri-list", FALSE));
+        if (pData) {
+            gchar** uris = gtk_selection_data_get_uris(pData);
+            if (uris) {
+                for (gchar** pUri = uris; *pUri; ++pUri) {
+                    gchar* filename = g_filename_from_uri(*pUri, nullptr, nullptr);
+                    if (filename) {
+                        paths.emplace_back(filename);
+                        g_free(filename);
+                    }
+                }
+                g_strfreev(uris);
+            }
+            gtk_selection_data_free(pData);
+        }
+    }
 #endif
     return paths;
 }
