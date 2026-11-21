@@ -157,8 +157,8 @@ CtMainWin::CtMainWin(bool                            no_gui,
     _scrolledwindowTree.get_style_context()->add_class("ct-tree-scroll-panel");
     _scrolledwindowText.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     _uCtProjectPanel.reset(new CtProjectPanel{this});
-    // first time the workspace panel is mapped (shown), reserve its configured width
-    // and give the lower half half of the vertical space
+#if GTKMM_MAJOR_VERSION >= 4
+    // GTK4 has no size-allocate signal: init the split ratios on first map + idle
     _uCtProjectPanel->signal_map().connect([this]() {
         if (not _sidebarPosInit) {
             _sidebarPosInit = true;
@@ -182,6 +182,7 @@ CtMainWin::CtMainWin(bool                            no_gui,
             });
         }
     });
+#endif
 #if GTKMM_MAJOR_VERSION >= 4
     _scrolledwindowText.set_child(_ctTextview.mm());
     _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
@@ -224,11 +225,37 @@ CtMainWin::CtMainWin(bool                            no_gui,
         _hPaned.pack2(_vboxText, Gtk::EXPAND);
     }
     // lower half: workspace panel + its explorer-like browser, side by side
-    _hPanedLower.pack1(*_uCtProjectPanel, Gtk::FILL);
-    _hPanedLower.pack2(*_uCtWorkspaceBrowser, Gtk::EXPAND);
-    _vPanedMain.pack1(_hPaned, Gtk::EXPAND);
-    _vPanedMain.pack2(_hPanedLower, Gtk::FILL);
+    // (resize=true, shrink=false: neither half may collapse below its minimum,
+    // so the two halves stay adjacent -- dragging the divider trades their space,
+    // one never covers the other)
+    _hPanedLower.pack1(*_uCtProjectPanel, true, false);
+    _hPanedLower.pack2(*_uCtWorkspaceBrowser, true, false);
+    _vPanedMain.pack1(_hPaned, true, false);
+    _vPanedMain.pack2(_hPanedLower, true, false);
     _vPaned.pack1(_vPanedMain, Gtk::EXPAND);
+    // split ratios on the first real allocation (map/idle can fire before the
+    // window is actually laid out, which used to collapse the upper half)
+    _hPanedLower.signal_size_allocate().connect([this](Gtk::Allocation& alloc) {
+        if (not _sidebarPosInit and alloc.get_width() > 300) {
+            _sidebarPosInit = true;
+            const int width = alloc.get_width();
+            const int panelWidth = std::min(std::max(240, width - _pCtConfig->rightSidebarWidth), width - 200);
+            if (panelWidth > 0) {
+                _hPanedLower.set_position(panelWidth);
+            }
+        }
+        if (not _lowerAreaPosInit and alloc.get_height() > 100) {
+            _lowerAreaPosInit = true;
+            // refine to 50/50 once the window has settled
+            Glib::signal_idle().connect([this]() -> bool {
+                const int height = _vPanedMain.get_allocated_height();
+                if (height > 100) {
+                    _vPanedMain.set_position(height / 2);
+                }
+                return false;
+            });
+        }
+    });
 #endif
     _hPaned.property_wide_handle() = true;
     update_project_panel();
