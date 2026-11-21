@@ -88,6 +88,7 @@ class CtMenu;
 class CtPrint;
 class CtStorageControl;
 class CtProjectPanel;
+class CtWorkspaceBrowser;
 
 class CtMainWin : public Gtk::ApplicationWindow
 {
@@ -235,6 +236,9 @@ public:
     void show_hide_right_sidebar(bool visible);
     void update_project_panel();
     CtProjectPanel* get_project_panel() { return _uCtProjectPanel.get(); }
+    // edit-area view switching: workspace browsing vs note editing
+    void show_workspace_entry_in_editor(const std::string& path, bool isDir);
+    void show_text_editor_view();
 
     Gtk::Widget* get_vte()        { return _pVte; }
     bool         is_vte_visible() { return _hBoxVte.property_visible(); }
@@ -387,6 +391,8 @@ private:
     Gtk::ScrolledWindow          _scrolledwindowTree;
     Gtk::ScrolledWindow          _scrolledwindowText;
     std::unique_ptr<CtProjectPanel> _uCtProjectPanel;
+    std::unique_ptr<CtWorkspaceBrowser> _uCtWorkspaceBrowser;
+    Gtk::Stack*                  _pEditAreaStack{nullptr}; // owns scrolledwindowText + workspace browser
     std::unique_ptr<CtTreeStore> _uCtTreestore;
     std::unique_ptr<CtTreeView>  _uCtTreeview;
     CtTextView                   _ctTextview;

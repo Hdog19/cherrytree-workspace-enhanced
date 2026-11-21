@@ -60,6 +60,25 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         sigc::mem_fun(*this, &CtProjectPanel::_on_row_activated)));
     _sigcConnections.push_back(_treeView.signal_button_press_event().connect(
         [this](GdkEventButton* pEvent) { return _on_button_press_event(pEvent); }, false));
+    // workspace <-> edit-area link: selecting a filesystem entry browses it in the edit area
+    _sigcConnections.push_back(_treeView.signal_cursor_changed().connect([this]() {
+        Gtk::TreeModel::Path path;
+        Gtk::TreeViewColumn* pColumn{nullptr};
+        _treeView.get_cursor(path, pColumn);
+        if (not path) {
+            return;
+        }
+        Gtk::TreeModel::iterator iter = _rTreeStore->get_iter(path);
+        if (not iter) {
+            return;
+        }
+        Gtk::TreeModel::Row row = *iter;
+        const std::string entryPath = row[_columns.colPath];
+        if (KindFs != (int)row[_columns.colKind] or row[_columns.colDummy] or entryPath.empty()) {
+            return;
+        }
+        _pCtMainWin->show_workspace_entry_in_editor(entryPath, (bool)row[_columns.colIsDir]);
+    }));
 
     Gtk::ScrolledWindow* pScrolledWindow = Gtk::manage(new Gtk::ScrolledWindow{});
     pScrolledWindow->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);

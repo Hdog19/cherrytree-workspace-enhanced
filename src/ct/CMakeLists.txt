@@ -75,6 +75,7 @@ set(CT_SHARED_FILES
   ct_treestore.cc
   ct_widgets.cc
   ct_project_panel.cc
+  ct_workspace_browser.cc
   ct_actions_project.cc
   ct_text_view.cc
   ct_parser_text.cc

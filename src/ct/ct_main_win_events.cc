@@ -33,6 +33,7 @@ void CtMainWin::_on_treeview_cursor_changed()
         _prevTreeIter = treeIter;
         return;
     }
+    show_text_editor_view(); // selecting a note always switches back from the workspace browser
     const gint64 nodeId = treeIter.get_node_id();
     const gint64 nodeIdDataHolder = treeIter.get_node_id_data_holder();
     if (_prevTreeIter) {

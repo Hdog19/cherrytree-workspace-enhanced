@@ -31,6 +31,7 @@
 #include "ct_main_win.h"
 #include "ct_actions.h"
 #include "ct_project_panel.h"
+#include "ct_workspace_browser.h"
 #include "ct_storage_control.h"
 #include "ct_clipboard.h"
 #include "ct_dialogs.h"
@@ -168,8 +169,15 @@ CtMainWin::CtMainWin(bool                            no_gui,
     });
 #if GTKMM_MAJOR_VERSION >= 4
     _scrolledwindowText.set_child(_ctTextview.mm());
+    // edit area: a stack holding the note editor and the workspace browser
+    _pEditAreaStack = Gtk::manage(new Gtk::Stack{});
+    _pEditAreaStack->set_hexpand(true);
+    _pEditAreaStack->set_vexpand(true);
+    _pEditAreaStack->add(_scrolledwindowText, "editor");
+    _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
+    _pEditAreaStack->add(*_uCtWorkspaceBrowser, "browser");
     _vboxText.append(_init_window_header());
-    _hPanedRight.set_start_child(_scrolledwindowText);
+    _hPanedRight.set_start_child(*_pEditAreaStack);
     _hPanedRight.set_end_child(*_uCtProjectPanel);
     _hPanedRight.set_expand(true);
     _vboxText.append(_hPanedRight);
@@ -188,7 +196,12 @@ CtMainWin::CtMainWin(bool                            no_gui,
     _vPaned.set_start_child(_hPaned);
 #else
     _scrolledwindowText.add(_ctTextview.mm());
-    _hPanedRight.pack1(_scrolledwindowText, Gtk::EXPAND);
+    // edit area: a stack holding the note editor and the workspace browser
+    _pEditAreaStack = Gtk::manage(new Gtk::Stack{});
+    _pEditAreaStack->add(_scrolledwindowText, "editor");
+    _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
+    _pEditAreaStack->add(*_uCtWorkspaceBrowser, "browser");
+    _hPanedRight.pack1(*_pEditAreaStack, Gtk::EXPAND);
     _hPanedRight.pack2(*_uCtProjectPanel, Gtk::FILL);
     _vboxText.pack_start(_init_window_header(), false, false);
     _vboxText.pack_start(_hPanedRight);
@@ -1399,6 +1412,23 @@ void CtMainWin::update_project_panel()
     _uCtProjectPanel->attach_to_doc(docPath);
     const bool hasContent = not (_uCtProjectPanel->get_mounts().empty() and _uCtProjectPanel->get_note_shortcuts().empty());
     _uCtProjectPanel->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
+}
+
+void CtMainWin::show_workspace_entry_in_editor(const std::string& path, bool isDir)
+{
+    if (not _pEditAreaStack or not _uCtWorkspaceBrowser) {
+        return;
+    }
+    _uCtWorkspaceBrowser->browse_path(path, isDir);
+    _pEditAreaStack->set_visible_child("browser");
+}
+
+void CtMainWin::show_text_editor_view()
+{
+    if (not _pEditAreaStack) {
+        return;
+    }
+    _pEditAreaStack->set_visible_child("editor");
 }
 
 void CtMainWin::show_hide_right_sidebar(bool visible)
