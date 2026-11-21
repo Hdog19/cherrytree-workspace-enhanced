@@ -69,6 +69,7 @@ public:
 protected:
     void          _populate_dir(const std::string& dirPath, const Gtk::TreeModel::iterator& parentIter);
     void          _populate_root();
+    void          _refresh_ui(); // rebuild from _mountFolders/_noteShortcutIds and manage visibility
     bool          _is_row_dummy(const Gtk::TreeModel::iterator& iter);
     bool          _is_empty_workspace() const;
     bool          _on_test_expand_row(const Gtk::TreeModel::iterator& iter, const Gtk::TreeModel::Path& path);

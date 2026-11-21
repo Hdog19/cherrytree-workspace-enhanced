@@ -86,6 +86,12 @@ void CtProjectPanel::set_workspace(const std::vector<std::string>& mounts, const
     }
     _mountFolders = mounts;
     _noteShortcutIds = noteShortcuts;
+    _refresh_ui();
+}
+
+// rebuild the visible tree from _mountFolders/_noteShortcutIds (must be called after mutating them)
+void CtProjectPanel::_refresh_ui()
+{
     if (_is_empty_workspace()) {
         _pendingRefreshConn.disconnect();
         _stop_file_monitors();
@@ -170,7 +176,7 @@ void CtProjectPanel::add_note_shortcut(gint64 nodeId)
     }
     _noteShortcutIds.push_back(nodeId);
     _persist();
-    set_workspace(_mountFolders, _noteShortcutIds);
+    _refresh_ui();
 }
 
 void CtProjectPanel::remove_note_shortcut(gint64 nodeId)
@@ -179,7 +185,7 @@ void CtProjectPanel::remove_note_shortcut(gint64 nodeId)
     if (it != _noteShortcutIds.end()) {
         _noteShortcutIds.erase(it);
         _persist();
-        set_workspace(_mountFolders, _noteShortcutIds);
+        _refresh_ui();
     }
 }
 
@@ -193,7 +199,7 @@ bool CtProjectPanel::add_mount(const std::string& folderPath)
     }
     _mountFolders.push_back(folderPath);
     _persist();
-    set_workspace(_mountFolders, _noteShortcutIds);
+    _refresh_ui();
     return true;
 }
 
@@ -203,7 +209,7 @@ void CtProjectPanel::remove_mount(const std::string& folderPath)
     if (it != _mountFolders.end()) {
         _mountFolders.erase(it);
         _persist();
-        set_workspace(_mountFolders, _noteShortcutIds);
+        _refresh_ui();
     }
 }
 
