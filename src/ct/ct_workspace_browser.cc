@@ -403,10 +403,13 @@ void CtWorkspaceBrowser::_refresh_current()
 
 void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vector<std::string>& selPaths)
 {
+    // One and the same menu for a selected entry and for the blank area:
+    // items that need a selection are simply disabled on the blank area.
     Gtk::Menu* pMenu = Gtk::manage(new Gtk::Menu{});
-    auto addMenuItem = [pMenu](const char* label, std::function<void()> slot) {
+    auto addMenuItem = [pMenu](const char* label, std::function<void()> slot, bool sensitive = true) {
         Gtk::MenuItem* pMenuItem = Gtk::manage(new Gtk::MenuItem{label, true});
         pMenuItem->signal_activate().connect(slot);
+        pMenuItem->set_sensitive(sensitive);
         pMenu->append(*pMenuItem);
     };
     auto addSeparator = [pMenu]() {
@@ -414,51 +417,40 @@ void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vect
         pMenu->append(*pSep);
     };
 
-    if (selPaths.empty()) {
-        // blank area: workspace-level actions
-        addMenuItem("新建文件夹", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_new_folder));
-        addMenuItem("新建文本文件", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_new_file));
-        if (not _clipPaths.empty()) {
-            addSeparator();
-            addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_paste));
-        }
-        addSeparator();
-        addMenuItem("在 PowerShell 中打开", [this]() { _open_in_powershell(_currPath); });
-        addMenuItem("刷新", sigc::mem_fun(*this, &CtWorkspaceBrowser::_refresh_current));
-    }
-    else {
-        const std::string selPath = selPaths[0];
-        const bool selIsDir = Glib::file_test(selPath, Glib::FILE_TEST_IS_DIR);
-        addMenuItem("打开（系统默认程序）", [this, selPath]() {
-            if (Glib::file_test(selPath, Glib::FILE_TEST_IS_DIR)) {
-                fs::open_folderpath(fs::path{selPath}, _pCtMainWin->get_ct_config());
-            }
-            else {
-                fs::open_filepath(fs::path{selPath}, false, _pCtMainWin->get_ct_config());
-            }
-        });
+    const bool hasSel = not selPaths.empty();
+    const std::string selPath = hasSel ? selPaths[0] : std::string{};
+    const bool selIsDir = hasSel and Glib::file_test(selPath, Glib::FILE_TEST_IS_DIR);
+    const std::string psDir = hasSel ? (selIsDir ? selPath : stdfs::path{selPath}.parent_path().string())
+                                     : _currPath;
+    const std::string copyTarget = hasSel ? selPath : _currPath;
+
+    addMenuItem("打开（系统默认程序）", [this, selPath, selIsDir]() {
         if (selIsDir) {
-            addMenuItem("在此打开 PowerShell", [this, selPath]() { _open_in_powershell(selPath); });
+            fs::open_folderpath(fs::path{selPath}, _pCtMainWin->get_ct_config());
         }
         else {
-            addMenuItem("在 PowerShell 中打开所在文件夹", [this, selPath]() {
-                _open_in_powershell(stdfs::path{selPath}.parent_path().string());
-            });
+            fs::open_filepath(fs::path{selPath}, false, _pCtMainWin->get_ct_config());
         }
-        addMenuItem("复制路径", [this, selPath]() {
-            Gtk::Clipboard::get()->set_text(selPath);
-        });
-        addSeparator();
-        addMenuItem("剪切", [this]() { _do_copy(true); });
-        addMenuItem("复制", [this]() { _do_copy(false); });
-        if (not _clipPaths.empty()) {
-            addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）", sigc::mem_fun(*this, &CtWorkspaceBrowser::_do_paste));
-        }
-        addMenuItem("重命名（F2）", [this, selPath]() { _do_rename(selPath); });
-        addSeparator();
-        addMenuItem("删除（Del）", [this, selPaths]() { _do_delete(selPaths); });
-        addMenuItem("刷新", sigc::mem_fun(*this, &CtWorkspaceBrowser::_refresh_current));
-    }
+    }, hasSel);
+    addMenuItem("在 PowerShell 中打开", [this, psDir]() { open_in_powershell(psDir); });
+    addMenuItem("复制路径", [this, copyTarget]() {
+        Gtk::Clipboard::get()->set_text(copyTarget);
+    });
+    addSeparator();
+    addMenuItem("新建文件夹", [this]() { new_folder_in(_currPath); });
+    addMenuItem("新建文本文件", [this]() { new_file_in(_currPath); });
+    addSeparator();
+    addMenuItem("剪切", [this]() { _do_copy(true); }, hasSel);
+    addMenuItem("复制", [this]() { _do_copy(false); }, hasSel);
+    // "粘贴" is always present and usable, on nodes and on the blank area alike;
+    // paste_into() falls back to files copied in Windows Explorer
+    addMenuItem(_clipCut ? "粘贴（剪切）" : "粘贴（复制）",
+                [this]() { paste_into(_currPath); });
+    addSeparator();
+    addMenuItem("重命名（F2）", [this, selPath]() { rename_path(selPath); }, hasSel);
+    addMenuItem("删除（Del）", [this, selPaths]() { delete_paths(selPaths); }, hasSel);
+    addSeparator();
+    addMenuItem("刷新", [this]() { refresh(); });
 
     pMenu->show_all();
 #if GTKMM_MAJOR_VERSION >= 4
@@ -468,85 +460,87 @@ void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vect
 #endif
 }
 
-void CtWorkspaceBrowser::_do_new_folder()
+std::string CtWorkspaceBrowser::current_dir() const
 {
+    if (_currIsDir) {
+        return _currPath;
+    }
+    return _currPath.empty() ? std::string{} : stdfs::path{_currPath}.parent_path().string();
+}
+
+void CtWorkspaceBrowser::_refresh_dir_if_current(const std::string& dirPath)
+{
+    if (dirPath.empty()) {
+        return;
+    }
+    if (_currIsDir and not _currPath.empty() and stdfs::path{_currPath} == stdfs::path{dirPath}) {
+        _fill_dir(_currPath);
+    }
+}
+
+void CtWorkspaceBrowser::set_file_clipboard(const std::vector<std::string>& paths, bool cut)
+{
+    _clipPaths = paths;
+    _clipCut = cut;
+}
+
+void CtWorkspaceBrowser::_do_new_folder() { new_folder_in(_currPath); }
+void CtWorkspaceBrowser::_do_new_file()   { new_file_in(_currPath); }
+void CtWorkspaceBrowser::_do_paste()     { paste_into(_currPath); }
+void CtWorkspaceBrowser::_do_rename(const std::string& srcPath) { rename_path(srcPath); }
+void CtWorkspaceBrowser::_do_delete(const std::vector<std::string>& paths) { delete_paths(paths); }
+
+void CtWorkspaceBrowser::_do_copy(bool cut)
+{
+    std::vector<std::string> paths;
+    for (const auto& row : _listView.get_selection()->get_selected_rows()) {
+        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
+            paths.push_back((*iter)[_columns.colPath]);
+        }
+    }
+    set_file_clipboard(paths, cut);
+}
+
+void CtWorkspaceBrowser::new_folder_in(const std::string& dirPath)
+{
+    if (not Glib::file_test(dirPath, Glib::FILE_TEST_IS_DIR)) {
+        return;
+    }
     const Glib::ustring name = _entry_dialog("新建文件夹", "新建文件夹");
     if (name.empty()) {
         return;
     }
     std::error_code ec;
-    stdfs::create_directories(stdfs::path{_currPath} / stdfs::path{name.raw()}, ec);
+    stdfs::create_directories(stdfs::path{dirPath} / stdfs::path{name.raw()}, ec);
     if (ec) {
         spdlog::warn("cannot create folder {}: {}", name.raw(), ec.message());
         return;
     }
-    _refresh_current();
+    _refresh_dir_if_current(dirPath);
 }
 
-void CtWorkspaceBrowser::_do_new_file()
+void CtWorkspaceBrowser::new_file_in(const std::string& dirPath)
 {
+    if (not Glib::file_test(dirPath, Glib::FILE_TEST_IS_DIR)) {
+        return;
+    }
     const Glib::ustring name = _entry_dialog("新建文本文件", "新建文本文件.txt");
     if (name.empty()) {
         return;
     }
-    const stdfs::path newPath = stdfs::path{_currPath} / stdfs::path{name.raw()};
+    const stdfs::path newPath = stdfs::path{dirPath} / stdfs::path{name.raw()};
     {
         std::ofstream ofs{newPath, std::ios::app};
     }
-    _refresh_current();
+    _refresh_dir_if_current(dirPath);
 }
 
-void CtWorkspaceBrowser::_do_copy(bool cut)
-{
-    _clipPaths.clear();
-    for (const auto& row : _listView.get_selection()->get_selected_rows()) {
-        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
-            _clipPaths.push_back((*iter)[_columns.colPath]);
-        }
-    }
-    _clipCut = cut;
-}
-
-void CtWorkspaceBrowser::_do_paste()
-{
-    if (_clipPaths.empty() or not _currIsDir or _currPath.empty()) {
-        return;
-    }
-    const stdfs::path destDir{_currPath};
-    for (const std::string& srcStr : _clipPaths) {
-        const stdfs::path src{srcStr};
-        const stdfs::path dest = destDir / src.filename();
-        if (stdfs::equivalent(src, dest)) {
-            continue;
-        }
-        std::error_code ec;
-        if (_clipCut) {
-            stdfs::rename(src, dest, ec);
-            if (ec) {
-                // cross-drive move: copy then remove
-                _copy_recursive(src, dest);
-                stdfs::remove_all(src, ec);
-            }
-        }
-        else if (stdfs::is_directory(src)) {
-            _copy_recursive(src, dest);
-        }
-        else {
-            stdfs::copy_file(src, dest, stdfs::copy_options::overwrite_existing, ec);
-        }
-    }
-    if (_clipCut) {
-        _clipPaths.clear();
-        _clipCut = false;
-    }
-    _refresh_current();
-}
-
-void CtWorkspaceBrowser::_do_rename(const std::string& srcPath)
+void CtWorkspaceBrowser::rename_path(const std::string& srcPath)
 {
     const stdfs::path src{srcPath};
-    const Glib::ustring name = _entry_dialog("重命名", Glib::path_get_basename(srcPath));
-    if (name.empty() or name == Glib::path_get_basename(srcPath)) {
+    const Glib::ustring oldName = Glib::path_get_basename(srcPath);
+    const Glib::ustring name = _entry_dialog("重命名", oldName);
+    if (name.empty() or name == oldName) {
         return;
     }
     std::error_code ec;
@@ -555,10 +549,10 @@ void CtWorkspaceBrowser::_do_rename(const std::string& srcPath)
         spdlog::warn("cannot rename {}: {}", srcPath, ec.message());
         return;
     }
-    _refresh_current();
+    _refresh_dir_if_current(src.parent_path().string());
 }
 
-void CtWorkspaceBrowser::_do_delete(const std::vector<std::string>& paths)
+void CtWorkspaceBrowser::delete_paths(const std::vector<std::string>& paths)
 {
     if (paths.empty()) {
         return;
@@ -575,7 +569,90 @@ void CtWorkspaceBrowser::_do_delete(const std::vector<std::string>& paths)
             spdlog::warn("cannot delete {}: {}", path, ec.message());
         }
     }
-    _refresh_current();
+    _refresh_dir_if_current(stdfs::path{paths[0]}.parent_path().string());
+}
+
+void CtWorkspaceBrowser::paste_into(const std::string& destDir)
+{
+    if (destDir.empty() or not Glib::file_test(destDir, Glib::FILE_TEST_IS_DIR)) {
+        return;
+    }
+    std::vector<std::string> srcPaths = _clipPaths;
+    const bool cut = _clipCut;
+    if (srcPaths.empty()) {
+        // support files copied in Windows Explorer (text/uri-list on the system clipboard)
+        srcPaths = _system_clipboard_files();
+    }
+    if (srcPaths.empty()) {
+        CtDialogs::warning_dialog("剪贴板中没有可粘贴的文件", *_pCtMainWin);
+        return;
+    }
+    const stdfs::path destDirPath{destDir};
+    for (const std::string& srcStr : srcPaths) {
+        const stdfs::path src{srcStr};
+        if (not stdfs::exists(src)) {
+            continue;
+        }
+        const stdfs::path dest = destDirPath / src.filename();
+        std::error_code ec;
+        std::error_code eqEc;
+        const bool sameFile = stdfs::equivalent(src, dest, eqEc);
+        if (not eqEc and sameFile) {
+            continue; // pasting onto itself
+        }
+        if (cut and not _clipPaths.empty()) {
+            stdfs::rename(src, dest, ec);
+            if (ec) {
+                // cross-drive move: copy then remove
+                if (stdfs::is_directory(src)) {
+                    _copy_recursive(src, dest);
+                }
+                else {
+                    stdfs::copy_file(src, dest, stdfs::copy_options::overwrite_existing, ec);
+                }
+                stdfs::remove_all(src, ec);
+            }
+        }
+        else if (stdfs::is_directory(src)) {
+            _copy_recursive(src, dest);
+        }
+        else {
+            stdfs::copy_file(src, dest, stdfs::copy_options::overwrite_existing, ec);
+        }
+    }
+    if (cut and not _clipPaths.empty()) {
+        set_file_clipboard({}, false);
+    }
+    _refresh_dir_if_current(destDir);
+}
+
+std::vector<std::string> CtWorkspaceBrowser::_system_clipboard_files()
+{
+    std::vector<std::string> paths;
+#if GTKMM_MAJOR_VERSION < 4
+    GtkClipboard* pClipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    if (not pClipboard) {
+        return paths;
+    }
+    GtkSelectionData* pData = gtk_clipboard_wait_for_contents(
+        pClipboard, gdk_atom_intern("text/uri-list", FALSE));
+    if (not pData) {
+        return paths;
+    }
+    gchar** uris = gtk_selection_data_get_uris(pData);
+    if (uris) {
+        for (gchar** pUri = uris; *pUri; ++pUri) {
+            gchar* filename = g_filename_from_uri(*pUri, nullptr, nullptr);
+            if (filename) {
+                paths.emplace_back(filename);
+                g_free(filename);
+            }
+        }
+        g_strfreev(uris);
+    }
+    gtk_selection_data_free(pData);
+#endif
+    return paths;
 }
 
 void CtWorkspaceBrowser::_copy_recursive(const stdfs::path& src, const stdfs::path& dst)
@@ -593,7 +670,7 @@ void CtWorkspaceBrowser::_copy_recursive(const stdfs::path& src, const stdfs::pa
     }
 }
 
-void CtWorkspaceBrowser::_open_in_powershell(const std::string& dirPath)
+void CtWorkspaceBrowser::open_in_powershell(const std::string& dirPath)
 {
     if (dirPath.empty()) {
         return;

@@ -15,6 +15,7 @@
 #include "ct_treestore.h"
 #include "ct_dialogs.h"
 #include "ct_filesystem.h"
+#include "ct_workspace_browser.h"
 #include <glibmm/i18n.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -484,15 +485,29 @@ bool CtProjectPanel::_on_button_press_event(GdkEventButton* pEvent)
 void CtProjectPanel::_show_context_menu(GdkEventButton* pEvent, const Gtk::TreeModel::Path& path)
 {
     Gtk::Menu* pMenu = Gtk::manage(new Gtk::Menu{});
-    auto addMenuItem = [pMenu](const char* label, std::function<void()> slot) {
+    auto addMenuItem = [pMenu](const char* label, std::function<void()> slot, bool sensitive = true) {
         Gtk::MenuItem* pMenuItem = Gtk::manage(new Gtk::MenuItem{label, true});
         pMenuItem->signal_activate().connect(slot);
+        pMenuItem->set_sensitive(sensitive);
         pMenu->append(*pMenuItem);
     };
+    auto addSeparator = [pMenu]() {
+        pMenu->append(*Gtk::manage(new Gtk::SeparatorMenuItem{}));
+    };
+    CtWorkspaceBrowser* pBrowser = _pCtMainWin->get_workspace_browser();
 
     if (path.empty()) {
+        // blank area of the panel: same explorer actions, targeting the folder shown in the edit area
+        const std::string currDir = pBrowser ? pBrowser->current_dir() : std::string{};
         addMenuItem("添加挂载文件夹...", sigc::mem_fun(*this, &CtProjectPanel::_add_mount_interactive));
         addMenuItem("添加当前笔记快捷入口", sigc::mem_fun(*this, &CtProjectPanel::_add_note_shortcut_interactive));
+        addSeparator();
+        const bool canPaste = pBrowser and not currDir.empty();
+        addMenuItem(pBrowser and pBrowser->is_file_clipboard_cut() ? "粘贴（剪切）到当前文件夹" : "粘贴（复制）到当前文件夹",
+                    [pBrowser, currDir]() { if (pBrowser) pBrowser->paste_into(currDir); }, canPaste);
+        addMenuItem("在 PowerShell 中打开当前文件夹",
+                    [pBrowser, currDir]() { if (pBrowser) pBrowser->open_in_powershell(currDir); }, not currDir.empty());
+        addMenuItem("刷新", [pBrowser]() { if (pBrowser) pBrowser->refresh(); }, pBrowser);
         pMenu->show_all();
 #if GTKMM_MAJOR_VERSION >= 4
         pMenu->popup();
@@ -516,26 +531,64 @@ void CtProjectPanel::_show_context_menu(GdkEventButton* pEvent, const Gtk::TreeM
         addMenuItem("移除快捷入口", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_remove_shortcut));
     }
     else {
-        addMenuItem("打开", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_open));
+        const std::string entryPath = row[_columns.colPath];
+        const std::string targetDir = isDir ? entryPath : Glib::path_get_dirname(entryPath);
+        const std::string parentDir = Glib::path_get_dirname(entryPath);
+        const bool isFs = (KindFs == kind) and not entryPath.empty();
+        auto refreshPanel = [this](const std::string& dirPath) { _refresh_parent_of(dirPath); };
+
+        // same menu as the edit-area browser (plus panel-specific entries)
+        addMenuItem("打开（系统默认程序）", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_open));
         addMenuItem("在文件管理器中打开", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_open_in_file_manager));
+        addMenuItem("在 PowerShell 中打开", [pBrowser, targetDir]() {
+            if (pBrowser) pBrowser->open_in_powershell(targetDir);
+        }, pBrowser);
+        addMenuItem("复制路径", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_copy_path));
         addMenuItem("插入链接到当前笔记", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_insert_link_into_note));
-        addMenuItem("复制文件路径", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_copy_path));
-        if (isDir) {
-            addMenuItem("添加文件到此处...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_add_file));
-            addMenuItem("在此新建文件夹...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_new_folder));
-            if (isMountRoot) {
-                addMenuItem("刷新", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_refresh_mount));
+        addSeparator();
+        addMenuItem("新建文件夹", [this, pBrowser, targetDir, refreshPanel]() {
+            if (pBrowser) pBrowser->new_folder_in(targetDir);
+            refreshPanel(targetDir);
+        }, pBrowser and isFs);
+        addMenuItem("新建文本文件", [this, pBrowser, targetDir, refreshPanel]() {
+            if (pBrowser) pBrowser->new_file_in(targetDir);
+            refreshPanel(targetDir);
+        }, pBrowser and isFs);
+        addMenuItem("添加文件到此处...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_add_file), isDir);
+        addSeparator();
+        addMenuItem("剪切", [pBrowser, entryPath]() {
+            if (pBrowser) pBrowser->set_file_clipboard({entryPath}, true);
+        }, pBrowser and isFs);
+        addMenuItem("复制", [pBrowser, entryPath]() {
+            if (pBrowser) pBrowser->set_file_clipboard({entryPath}, false);
+        }, pBrowser and isFs);
+        addMenuItem(pBrowser and pBrowser->is_file_clipboard_cut() ? "粘贴（剪切）" : "粘贴（复制）",
+                    [pBrowser, targetDir, refreshPanel]() {
+                        if (pBrowser) pBrowser->paste_into(targetDir);
+                        refreshPanel(targetDir);
+                    }, pBrowser);
+        addSeparator();
+        addMenuItem("重命名（F2）", [this, pBrowser, entryPath, parentDir, refreshPanel]() {
+            if (pBrowser) pBrowser->rename_path(entryPath);
+            refreshPanel(parentDir);
+        }, pBrowser and isFs);
+        addMenuItem("删除（Del）", [this, pBrowser, entryPath, parentDir, refreshPanel]() {
+            if (pBrowser) pBrowser->delete_paths({entryPath});
+            refreshPanel(parentDir);
+        }, pBrowser and isFs and not isMountRoot);
+        addSeparator();
+        addMenuItem("刷新", [this, pBrowser, entryPath, parentDir, isDir, iter, refreshPanel]() {
+            if (pBrowser) pBrowser->refresh();
+            if (isDir) {
+                _populate_dir(entryPath, iter);
             }
-        }
-        else {
-            addMenuItem("重命名...", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_rename));
-        }
-        pMenu->append(*Gtk::manage(new Gtk::SeparatorMenuItem{}));
+            else {
+                refreshPanel(parentDir);
+            }
+        }, isFs);
         if (isMountRoot) {
+            addSeparator();
             addMenuItem("卸载此文件夹", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_unmount));
-        }
-        else {
-            addMenuItem("删除", sigc::mem_fun(*this, &CtProjectPanel::_on_menu_delete));
         }
     }
     pMenu->show_all();

@@ -49,6 +49,20 @@ public:
     // entry point from the project panel: path = selected folder or file
     void browse_path(const std::string& path, bool isDir);
 
+    // shared file operations: the workspace panel context menu uses the same
+    // operations and the same clipboard as the edit-area browser
+    void set_file_clipboard(const std::vector<std::string>& paths, bool cut);
+    bool has_file_clipboard() const { return not _clipPaths.empty(); }
+    bool is_file_clipboard_cut() const { return _clipCut; }
+    void paste_into(const std::string& destDir);
+    void new_folder_in(const std::string& dirPath);
+    void new_file_in(const std::string& dirPath);
+    void rename_path(const std::string& path);
+    void delete_paths(const std::vector<std::string>& paths);
+    void open_in_powershell(const std::string& dirPath);
+    void refresh() { _refresh_current(); }
+    std::string current_dir() const;
+
 protected:
     void        _navigate(const std::string& path, bool isDir, bool pushHistory);
     void        _fill_dir(const std::string& dirPath);
@@ -72,7 +86,8 @@ protected:
     void        _do_paste();
     void        _do_rename(const std::string& srcPath);
     void        _do_delete(const std::vector<std::string>& paths);
-    void        _open_in_powershell(const std::string& dirPath);
+    void        _refresh_dir_if_current(const std::string& dirPath);
+    std::vector<std::string> _system_clipboard_files(); // files copied in Windows Explorer
     Glib::ustring _entry_dialog(const Glib::ustring& title, const Glib::ustring& defaultText);
     static void _copy_recursive(const stdfs::path& src, const stdfs::path& dst);
     static Glib::ustring _format_size(guint64 bytes);

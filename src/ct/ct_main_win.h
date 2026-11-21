@@ -236,6 +236,7 @@ public:
     void show_hide_right_sidebar(bool visible);
     void update_project_panel();
     CtProjectPanel* get_project_panel() { return _uCtProjectPanel.get(); }
+    CtWorkspaceBrowser* get_workspace_browser() { return _uCtWorkspaceBrowser.get(); }
     // edit-area view switching: workspace browsing vs note editing
     void show_workspace_entry_in_editor(const std::string& path, bool isDir);
     void show_text_editor_view();
