@@ -94,6 +94,9 @@ void CtProjectPanel::set_workspace(const std::vector<std::string>& mounts, const
         return;
     }
     show_all_children();
+    if (_pCtMainWin->get_ct_config()->rightSidebarVisible) {
+        show(); // the panel may have been hidden while the workspace was empty
+    }
     if (_searchMode) {
         _run_search(_searchQuery); // workspace changed: re-run the active search
     }
