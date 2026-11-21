@@ -158,25 +158,15 @@ CtMainWin::CtMainWin(bool                            no_gui,
     _scrolledwindowText.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     _uCtProjectPanel.reset(new CtProjectPanel{this});
 #if GTKMM_MAJOR_VERSION >= 4
-    // GTK4 has no size-allocate signal: init the split ratios on first map + idle
+    // GTK4 has no size-allocate signal: init the upper/lower split on first map + idle
     _uCtProjectPanel->signal_map().connect([this]() {
-        if (not _sidebarPosInit) {
-            _sidebarPosInit = true;
-            const int width = _hPanedLower.get_width();
-            if (width > 0) {
-                // workspace panel at least 240px, browser keeps at least 200px
-                const int panelWidth = std::min(std::max(240, width - _pCtConfig->rightSidebarWidth), width - 200);
-                if (panelWidth > 0) {
-                    _hPanedLower.set_position(panelWidth);
-                }
-            }
-        }
         if (not _lowerAreaPosInit) {
             _lowerAreaPosInit = true;
             Glib::signal_idle().connect([this]() -> bool {
-                const int height = _vPanedMain.get_height();
+                const int height = _vPanedLeft.get_height();
                 if (height > 0) {
-                    _vPanedMain.set_position(height / 2);
+                    _vPanedLeft.set_position(height / 2);
+                    _vPanedRight.set_position(height / 2);
                 }
                 return false;
             });
@@ -186,77 +176,81 @@ CtMainWin::CtMainWin(bool                            no_gui,
 #if GTKMM_MAJOR_VERSION >= 4
     _scrolledwindowText.set_child(_ctTextview.mm());
     _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
-    // upper half: note tree + note editor
+    // 2x2 grid: left column = note tree / workspace panel, right column = note editor / workspace browser
     _vboxText.append(_init_window_header());
     _vboxText.append(_scrolledwindowText);
     _vboxText.set_expand(true);
     _vboxTree.append(_scrolledwindowTree);
     _scrolledwindowTree.set_expand(true);
+    _vPanedLeft.set_start_child(_vboxTree);
+    _vPanedLeft.set_end_child(*_uCtProjectPanel);
+    _vPanedRight.set_start_child(_vboxText);
+    _vPanedRight.set_end_child(*_uCtWorkspaceBrowser);
     if (_pCtConfig->treeRightSide) {
-        _hPaned.set_start_child(_vboxText);
-        _hPaned.set_end_child(_vboxTree);
+        _hPaned.set_start_child(_vPanedRight);
+        _hPaned.set_end_child(_vPanedLeft);
     }
     else {
-        _hPaned.set_start_child(_vboxTree);
-        _hPaned.set_end_child(_vboxText);
+        _hPaned.set_start_child(_vPanedLeft);
+        _hPaned.set_end_child(_vPanedRight);
     }
     _hPaned.set_expand(true);
-    // lower half: workspace panel + its explorer-like browser, side by side
-    _hPanedLower.set_start_child(*_uCtProjectPanel);
-    _hPanedLower.set_end_child(*_uCtWorkspaceBrowser);
-    _hPanedLower.set_expand(true);
-    _vPanedMain.set_start_child(_hPaned);
-    _vPanedMain.set_end_child(_hPanedLower);
-    _vPanedMain.set_expand(true);
-    _vPaned.set_start_child(_vPanedMain);
+    _vPaned.set_start_child(_hPaned);
 #else
     _scrolledwindowText.add(_ctTextview.mm());
     _uCtWorkspaceBrowser.reset(new CtWorkspaceBrowser{this});
-    // upper half: note tree + note editor
+    // 2x2 grid: left column = note tree / workspace panel, right column = note editor / workspace browser.
+    // Both columns share ONE vertical divider (_hPaned), so the two trees always have the same width.
+    // (resize=true, shrink=false: no quadrant may collapse below its minimum and cover its neighbor)
     _vboxText.pack_start(_init_window_header(), false, false);
     _vboxText.pack_start(_scrolledwindowText);
     _vboxTree.pack_start(_scrolledwindowTree, Gtk::PACK_EXPAND_WIDGET);
+    _vPanedLeft.pack1(_vboxTree, true, false);
+    _vPanedLeft.pack2(*_uCtProjectPanel, true, false);
+    _vPanedRight.pack1(_vboxText, true, false);
+    _vPanedRight.pack2(*_uCtWorkspaceBrowser, true, false);
     if (_pCtConfig->treeRightSide) {
-        _hPaned.pack1(_vboxText, Gtk::EXPAND);
-        _hPaned.pack2(_vboxTree, Gtk::FILL);
+        _hPaned.pack1(_vPanedRight, Gtk::EXPAND);
+        _hPaned.pack2(_vPanedLeft, Gtk::FILL);
     }
     else {
-        _hPaned.pack1(_vboxTree, Gtk::FILL);
-        _hPaned.pack2(_vboxText, Gtk::EXPAND);
+        _hPaned.pack1(_vPanedLeft, Gtk::FILL);
+        _hPaned.pack2(_vPanedRight, Gtk::EXPAND);
     }
-    // lower half: workspace panel + its explorer-like browser, side by side
-    // (resize=true, shrink=false: neither half may collapse below its minimum,
-    // so the two halves stay adjacent -- dragging the divider trades their space,
-    // one never covers the other)
-    _hPanedLower.pack1(*_uCtProjectPanel, true, false);
-    _hPanedLower.pack2(*_uCtWorkspaceBrowser, true, false);
-    _vPanedMain.pack1(_hPaned, true, false);
-    _vPanedMain.pack2(_hPanedLower, true, false);
-    _vPaned.pack1(_vPanedMain, Gtk::EXPAND);
-    // split ratios on the first real allocation (map/idle can fire before the
-    // window is actually laid out, which used to collapse the upper half)
-    _hPanedLower.signal_size_allocate().connect([this](Gtk::Allocation& alloc) {
-        if (not _sidebarPosInit and alloc.get_width() > 300) {
-            _sidebarPosInit = true;
-            const int width = alloc.get_width();
-            const int panelWidth = std::min(std::max(240, width - _pCtConfig->rightSidebarWidth), width - 200);
-            if (panelWidth > 0) {
-                _hPanedLower.set_position(panelWidth);
-            }
-        }
+    _vPaned.pack1(_hPaned, Gtk::EXPAND);
+    // upper/lower split (50/50) on the first real allocation: map/idle can fire
+    // before the window is actually laid out, which used to collapse the upper half
+    _vPanedLeft.signal_size_allocate().connect([this](Gtk::Allocation& alloc) {
         if (not _lowerAreaPosInit and alloc.get_height() > 100) {
             _lowerAreaPosInit = true;
             // refine to 50/50 once the window has settled
             Glib::signal_idle().connect([this]() -> bool {
-                const int height = _vPanedMain.get_allocated_height();
+                const int height = _vPanedLeft.get_allocated_height();
                 if (height > 100) {
-                    _vPanedMain.set_position(height / 2);
+                    _vPanedLeft.set_position(height / 2);
+                    _vPanedRight.set_position(height / 2);
                 }
                 return false;
             });
         }
     });
 #endif
+    // keep the two columns' horizontal divider aligned: dragging either one moves both,
+    // so the cross stays a cross and the four quadrants never overlap
+    _vPanedLeft.property_position().signal_changed().connect([this]() {
+        if (not _syncingPaned) {
+            _syncingPaned = true;
+            _vPanedRight.set_position(_vPanedLeft.get_position());
+            _syncingPaned = false;
+        }
+    });
+    _vPanedRight.property_position().signal_changed().connect([this]() {
+        if (not _syncingPaned) {
+            _syncingPaned = true;
+            _vPanedLeft.set_position(_vPanedRight.get_position());
+            _syncingPaned = false;
+        }
+    });
     _hPaned.property_wide_handle() = true;
     update_project_panel();
 #if GTKMM_MAJOR_VERSION >= 4
@@ -1453,8 +1447,9 @@ void CtMainWin::update_project_panel()
     _uCtProjectPanel->attach_to_doc(docPath);
     const bool hasContent = not (_uCtProjectPanel->get_mounts().empty() and _uCtProjectPanel->get_note_shortcuts().empty());
     _uCtProjectPanel->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
-    // hide the whole lower half when there is no workspace to browse
-    _hPanedLower.set_visible(hasContent and _pCtConfig->rightSidebarVisible);
+    // hide the whole lower row when there is no workspace to browse:
+    // both columns then give all their height to the upper quadrants
+    _uCtWorkspaceBrowser->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
 }
 
 void CtMainWin::show_workspace_entry(const std::string& path, bool isDir)
@@ -1477,26 +1472,26 @@ void CtMainWin::config_switch_tree_side()
 
 #if GTKMM_MAJOR_VERSION >= 4
     if (_pCtConfig->treeRightSide) {
-        _hPaned.set_start_child(_vboxText);
-        _hPaned.set_end_child(_vboxTree);
+        _hPaned.set_start_child(_vPanedRight);
+        _hPaned.set_end_child(_vPanedLeft);
         _hPaned.set_position(text_width);
     }
     else {
-        _hPaned.set_start_child(_vboxTree);
-        _hPaned.set_end_child(_vboxText);
+        _hPaned.set_start_child(_vPanedLeft);
+        _hPaned.set_end_child(_vPanedRight);
         _hPaned.set_position(tree_width);
     }
 #else
-    _hPaned.remove(_vboxTree);
-    _hPaned.remove(_vboxText);
+    _hPaned.remove(_vPanedLeft);
+    _hPaned.remove(_vPanedRight);
     if (_pCtConfig->treeRightSide) {
-        _hPaned.pack1(_vboxText, Gtk::EXPAND);
-        _hPaned.pack2(_vboxTree, Gtk::FILL);
+        _hPaned.pack1(_vPanedRight, Gtk::EXPAND);
+        _hPaned.pack2(_vPanedLeft, Gtk::FILL);
         _hPaned.property_position() = text_width;
     }
     else {
-        _hPaned.pack1(_vboxTree, Gtk::FILL);
-        _hPaned.pack2(_vboxText, Gtk::EXPAND);
+        _hPaned.pack1(_vPanedLeft, Gtk::FILL);
+        _hPaned.pack2(_vPanedRight, Gtk::EXPAND);
         _hPaned.property_position() = tree_width;
     }
 #endif

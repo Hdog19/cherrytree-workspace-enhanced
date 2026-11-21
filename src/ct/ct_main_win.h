@@ -386,15 +386,17 @@ private:
     #endif /* GTKMM_MAJOR_VERSION >= 4 */
     CtMenuAction*                _pSaveMenuAction{nullptr};
     Gtk::Box                     _vboxTree{Gtk::ORIENTATION_VERTICAL};
-    bool                         _sidebarPosInit{false};
     bool                         _lowerAreaPosInit{false};
     Gtk::ScrolledWindow          _scrolledwindowTree;
     Gtk::ScrolledWindow          _scrolledwindowText;
     std::unique_ptr<CtProjectPanel> _uCtProjectPanel;
     std::unique_ptr<CtWorkspaceBrowser> _uCtWorkspaceBrowser;
-    // main layout: upper half = note tree + note editor, lower half = workspace panel + workspace browser
-    Gtk::VPaned                  _vPanedMain;
-    Gtk::HPaned                  _hPanedLower;            // workspace panel (left) / workspace browser (right), draggable divider
+    // main layout: 2x2 grid -- left column (note tree / workspace panel) shares one
+    // width, right column (note editor / workspace browser); the two columns'
+    // horizontal split positions are kept in sync so the divider forms a clean cross
+    Gtk::VPaned                  _vPanedLeft;             // note tree (top) / workspace panel (bottom)
+    Gtk::VPaned                  _vPanedRight;            // note editor (top) / workspace browser (bottom)
+    bool                         _syncingPaned{false};
     std::unique_ptr<CtTreeStore> _uCtTreestore;
     std::unique_ptr<CtTreeView>  _uCtTreeview;
     CtTextView                   _ctTextview;
