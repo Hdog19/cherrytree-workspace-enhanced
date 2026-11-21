@@ -72,6 +72,20 @@ protected:
     bool        _on_list_button_press(GdkEventButton* pEvent);
     bool        _on_list_key_press(GdkEventKey* pEvent);
     void        _show_list_menu(GdkEventButton* pEvent, const std::vector<std::string>& selPaths);
+    // explorer-like view modes
+    enum class ViewMode { Details, LargeIcons, ExtraLargeIcons };
+    void        _set_view_mode(ViewMode mode);
+    int         _view_icon_size() const;
+    Glib::RefPtr<Gdk::Pixbuf> _entry_pixbuf(const std::string& path, bool isDir);
+    Glib::RefPtr<Gdk::Pixbuf> _load_thumbnail(const std::string& path, int size);
+    void        _on_icon_selection_changed();
+    void        _on_icon_item_activated(const Gtk::TreeModel::Path& path);
+    bool        _on_icon_button_press(GdkEventButton* pEvent);
+    bool        _on_icon_key_press(GdkEventKey* pEvent);
+    bool        _handle_key_press(GdkEventKey* pEvent, const std::vector<std::string>& selPaths);
+    std::vector<std::string> _list_sel_paths();
+    std::vector<std::string> _icon_sel_paths();
+    void        _activate_entry(const std::string& entryPath, bool isDir);
     void        _show_details(const Gtk::TreeModel::Row& row);
     void        _clear_details();
     void        _refresh_current();
@@ -82,7 +96,6 @@ protected:
     // file operations (explorer-like context menu)
     void        _do_new_folder();
     void        _do_new_file();
-    void        _do_copy(bool cut);
     void        _do_paste();
     void        _do_rename(const std::string& srcPath);
     void        _do_delete(const std::vector<std::string>& paths);
@@ -102,6 +115,9 @@ protected:
     CtWorkspaceBrowserColumns _columns;
     Glib::RefPtr<Gtk::ListStore> _rListStore;
     Gtk::TreeView   _listView;
+    Gtk::IconView   _iconView;     // icons view (large / extra-large thumbnails)
+    Gtk::Stack      _viewStack;    // list page content: "details" (TreeView) / "icons" (IconView)
+    ViewMode        _viewMode{ViewMode::Details};
     Gtk::Stack      _pages;        // "list" / "props"
     Gtk::Button     _backButton;
     Gtk::Button     _upButton;

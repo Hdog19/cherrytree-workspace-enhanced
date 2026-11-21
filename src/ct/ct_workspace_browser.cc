@@ -75,6 +75,24 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
         [this](GdkEventKey* pEvent) { return _on_list_key_press(pEvent); }, false);
 #endif
 
+    // icons view (large / extra-large, thumbnails for images) sharing the same model
+    _iconView.set_model(_rListStore);
+    _iconView.set_pixbuf_column(_columns.colIcon);
+    _iconView.set_text_column(_columns.colName);
+    _iconView.set_spacing(4);
+    _iconView.set_item_padding(3);
+    _iconView.set_item_width(96);
+    _iconView.signal_selection_changed().connect(sigc::mem_fun(*this, &CtWorkspaceBrowser::_on_icon_selection_changed));
+    _iconView.signal_item_activated().connect(sigc::mem_fun(*this, &CtWorkspaceBrowser::_on_icon_item_activated));
+#if GTKMM_MAJOR_VERSION < 4
+    _iconView.signal_button_press_event().connect(
+        [this](GdkEventButton* pEvent) { return _on_icon_button_press(pEvent); }, false);
+    _iconView.signal_key_press_event().connect(
+        [this](GdkEventKey* pEvent) { return _on_icon_key_press(pEvent); }, false);
+#endif
+    Gtk::ScrolledWindow* pIconScrolled = Gtk::manage(new Gtk::ScrolledWindow{});
+    pIconScrolled->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+
     // properties page
     Gtk::Box* pPropsBox = Gtk::manage(new Gtk::Box{Gtk::ORIENTATION_VERTICAL, 8});
 #if GTKMM_MAJOR_VERSION >= 4
@@ -131,13 +149,20 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
 
 #if GTKMM_MAJOR_VERSION >= 4
     pScrolledList->set_child(_listView);
-    _pages.append(*pScrolledList);
+    pIconScrolled->set_child(_iconView);
+    _viewStack.append(*pScrolledList);
+    _viewStack.append(*pIconScrolled);
+    _pages.append(_viewStack);
     _pages.append(*pPropsBox);
     set_start_child(_navBar);
     set_child(_pages);
 #else
     pScrolledList->add(_listView);
-    _pages.add(*pScrolledList, "list");
+    pIconScrolled->add(_iconView);
+    _viewStack.add(*pScrolledList, "details");
+    _viewStack.add(*pIconScrolled, "icons");
+    _viewStack.set_visible_child("details");
+    _pages.add(_viewStack, "list");
     _pages.add(*pPropsBox, "props");
     pack_start(_navBar, Gtk::PACK_SHRINK);
     pack_start(_pages);
@@ -216,7 +241,7 @@ void CtWorkspaceBrowser::_fill_dir(const std::string& dirPath)
             continue;
         }
         Gtk::TreeModel::Row row = *(_rListStore->append());
-        row[_columns.colIcon] = _get_icon(entry.path().string(), isDirEntry);
+        row[_columns.colIcon] = _entry_pixbuf(entry.path().string(), isDirEntry);
         row[_columns.colName] = Glib::path_get_basename(entry.path().string());
         if (isDirEntry) {
             row[_columns.colSize] = "";
@@ -354,31 +379,73 @@ bool CtWorkspaceBrowser::_on_list_button_press(GdkEventButton* pEvent)
 
 bool CtWorkspaceBrowser::_on_list_key_press(GdkEventKey* pEvent)
 {
+    return _handle_key_press(pEvent, _list_sel_paths());
+}
+
+bool CtWorkspaceBrowser::_on_icon_key_press(GdkEventKey* pEvent)
+{
+    return _handle_key_press(pEvent, _icon_sel_paths());
+}
+
+bool CtWorkspaceBrowser::_handle_key_press(GdkEventKey* pEvent, const std::vector<std::string>& selPaths)
+{
     const guint keyval = pEvent->keyval;
     const guint state = pEvent->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_MOD1_MASK);
     if (keyval == GDK_KEY_F2) {
-        const auto sel = _listView.get_selection()->get_selected_rows();
-        if (sel.size() == 1) {
-            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(sel[0])) {
-                _do_rename((*iter)[_columns.colPath]);
-            }
+        if (selPaths.size() == 1) {
+            rename_path(selPaths[0]);
         }
         return true;
     }
     if (keyval == GDK_KEY_Delete) {
-        std::vector<std::string> paths;
-        for (const auto& row : _listView.get_selection()->get_selected_rows()) {
-            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
-                paths.push_back((*iter)[_columns.colPath]);
-            }
-        }
-        _do_delete(paths);
+        delete_paths(selPaths);
         return true;
     }
-    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_c) { _do_copy(false); return true; }
-    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_x) { _do_copy(true); return true; }
-    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_v) { _do_paste(); return true; }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_c) {
+        if (not selPaths.empty()) set_file_clipboard(selPaths, false);
+        return true;
+    }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_x) {
+        if (not selPaths.empty()) set_file_clipboard(selPaths, true);
+        return true;
+    }
+    if (state == GDK_CONTROL_MASK and keyval == GDK_KEY_v) { paste_into(_currPath); return true; }
     return false;
+}
+
+std::vector<std::string> CtWorkspaceBrowser::_list_sel_paths()
+{
+    std::vector<std::string> paths;
+    for (const auto& row : _listView.get_selection()->get_selected_rows()) {
+        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
+            paths.push_back((*iter)[_columns.colPath]);
+        }
+    }
+    return paths;
+}
+
+std::vector<std::string> CtWorkspaceBrowser::_icon_sel_paths()
+{
+    std::vector<std::string> paths;
+    for (const Gtk::TreeModel::Path& treePath : _iconView.get_selected_items()) {
+        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(treePath)) {
+            paths.push_back((*iter)[_columns.colPath]);
+        }
+    }
+    return paths;
+}
+
+void CtWorkspaceBrowser::_activate_entry(const std::string& entryPath, bool isDir)
+{
+    if (entryPath.empty()) {
+        return;
+    }
+    if (isDir) {
+        _navigate(entryPath, true, true);
+    }
+    else {
+        fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
+    }
 }
 
 void CtWorkspaceBrowser::_show_details(const Gtk::TreeModel::Row& row)
@@ -395,6 +462,121 @@ void CtWorkspaceBrowser::_show_details(const Gtk::TreeModel::Row& row)
 void CtWorkspaceBrowser::_clear_details()
 {
     _detailsLabel.set_text("");
+}
+
+// ---- explorer-like view modes -------------------------------------------
+
+int CtWorkspaceBrowser::_view_icon_size() const
+{
+    switch (_viewMode) {
+        case ViewMode::LargeIcons:      return 48;
+        case ViewMode::ExtraLargeIcons: return 96;
+        default:                        return 16;
+    }
+}
+
+void CtWorkspaceBrowser::_set_view_mode(ViewMode mode)
+{
+    _viewMode = mode;
+    switch (mode) {
+        case ViewMode::Details:
+            _viewStack.set_visible_child("details");
+            break;
+        case ViewMode::LargeIcons:
+            _iconView.set_item_width(96);
+            _viewStack.set_visible_child("icons");
+            break;
+        case ViewMode::ExtraLargeIcons:
+            _iconView.set_item_width(150);
+            _viewStack.set_visible_child("icons");
+            break;
+    }
+    _refresh_current(); // refill the model with icons of the new size
+}
+
+Glib::RefPtr<Gdk::Pixbuf> CtWorkspaceBrowser::_entry_pixbuf(const std::string& path, bool isDir)
+{
+    const int size = _view_icon_size();
+    if (not isDir and _viewMode == ViewMode::ExtraLargeIcons and _is_image(path)) {
+        if (auto rThumb = _load_thumbnail(path, size)) {
+            return rThumb;
+        }
+    }
+    return _get_icon(path, isDir, size);
+}
+
+Glib::RefPtr<Gdk::Pixbuf> CtWorkspaceBrowser::_load_thumbnail(const std::string& path, int size)
+{
+    try {
+        std::ifstream ifs{path, std::ios::binary};
+        std::string data{std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()};
+        auto loader = Gdk::PixbufLoader::create();
+        loader->set_size(size, size);
+        loader->write(reinterpret_cast<const guint8*>(data.data()), data.size());
+        loader->close();
+        return loader->get_pixbuf();
+    }
+    catch (...) {
+        return Glib::RefPtr<Gdk::Pixbuf>{};
+    }
+}
+
+// ---- icons view events ----------------------------------------------------
+
+void CtWorkspaceBrowser::_on_icon_selection_changed()
+{
+    if (_filling) {
+        return;
+    }
+    const auto items = _iconView.get_selected_items();
+    if (items.empty()) {
+        _clear_details();
+        return;
+    }
+    if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(items[0])) {
+        _show_details(*iter);
+    }
+}
+
+void CtWorkspaceBrowser::_on_icon_item_activated(const Gtk::TreeModel::Path& path)
+{
+    if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(path)) {
+        Gtk::TreeModel::Row row = *iter;
+        _activate_entry(row[_columns.colPath], row[_columns.colIsDir]);
+    }
+}
+
+bool CtWorkspaceBrowser::_on_icon_button_press(GdkEventButton* pEvent)
+{
+    if (pEvent->type == GDK_BUTTON_PRESS and 1 == pEvent->button) {
+        // clicking the blank area only clears the selection (explorer-like)
+        const Gtk::TreeModel::Path hitPath = _iconView.get_path_at_pos((int)pEvent->x, (int)pEvent->y);
+        if (hitPath.empty()) {
+            _iconView.unselect_all();
+            _clear_details();
+        }
+        return false;
+    }
+    if (pEvent->type == GDK_BUTTON_PRESS and 3 == pEvent->button) {
+        std::vector<std::string> selPaths;
+        const Gtk::TreeModel::Path hitPath = _iconView.get_path_at_pos((int)pEvent->x, (int)pEvent->y);
+        if (not hitPath.empty()) {
+            const auto selected = _iconView.get_selected_items();
+            const bool alreadySelected = std::find(selected.begin(), selected.end(), hitPath) != selected.end();
+            if (not alreadySelected) {
+                _iconView.unselect_all();
+                _iconView.select_path(hitPath);
+            }
+            selPaths = _icon_sel_paths();
+        }
+        else {
+            _iconView.unselect_all();
+            _clear_details();
+        }
+        _show_list_menu(pEvent, selPaths);
+        return true;
+    }
+    return false;
 }
 
 void CtWorkspaceBrowser::_refresh_current()
@@ -454,6 +636,21 @@ void CtWorkspaceBrowser::_show_list_menu(GdkEventButton* pEvent, const std::vect
     addMenuItem("删除（Del）", [this, selPaths]() { delete_paths(selPaths); }, hasSel);
     addSeparator();
     addMenuItem("刷新", [this]() { refresh(); });
+    // view modes, like the explorer's View menu
+    Gtk::Menu* pViewMenu = Gtk::manage(new Gtk::Menu{});
+    auto addViewMode = [this, pViewMenu](const char* label, ViewMode mode) {
+        Gtk::CheckMenuItem* pItem = Gtk::manage(new Gtk::CheckMenuItem{label, true});
+        pItem->set_draw_as_radio(true);
+        pItem->set_active(_viewMode == mode);
+        pItem->signal_activate().connect([this, mode]() { _set_view_mode(mode); });
+        pViewMenu->append(*pItem);
+    };
+    addViewMode("详细信息", ViewMode::Details);
+    addViewMode("大图标", ViewMode::LargeIcons);
+    addViewMode("超大图标", ViewMode::ExtraLargeIcons);
+    Gtk::MenuItem* pViewItem = Gtk::manage(new Gtk::MenuItem{"查看", true});
+    pViewItem->set_submenu(*pViewMenu);
+    pMenu->append(*pViewItem);
 
     pMenu->show_all();
 #if GTKMM_MAJOR_VERSION >= 4
@@ -492,28 +689,6 @@ void CtWorkspaceBrowser::_do_new_file()   { new_file_in(_currPath); }
 void CtWorkspaceBrowser::_do_paste()     { paste_into(_currPath); }
 void CtWorkspaceBrowser::_do_rename(const std::string& srcPath) { rename_path(srcPath); }
 void CtWorkspaceBrowser::_do_delete(const std::vector<std::string>& paths) { delete_paths(paths); }
-
-void CtWorkspaceBrowser::_do_copy(bool cut)
-{
-    std::vector<std::string> paths;
-    for (const auto& row : _listView.get_selection()->get_selected_rows()) {
-        if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(row)) {
-            paths.push_back((*iter)[_columns.colPath]);
-        }
-    }
-    if (paths.empty()) {
-        // keyboard shortcut: fall back to the row under the cursor
-        Gtk::TreeModel::Path cursorPath;
-        Gtk::TreeViewColumn* pColumn{nullptr};
-        _listView.get_cursor(cursorPath, pColumn);
-        if (cursorPath) {
-            if (Gtk::TreeModel::iterator iter = _rListStore->get_iter(cursorPath)) {
-                paths.push_back((*iter)[_columns.colPath]);
-            }
-        }
-    }
-    set_file_clipboard(paths, cut);
-}
 
 void CtWorkspaceBrowser::new_folder_in(const std::string& dirPath)
 {
@@ -782,16 +957,7 @@ void CtWorkspaceBrowser::_on_list_row_activated(const Gtk::TreeModel::Path& path
         return;
     }
     Gtk::TreeModel::Row row = *iter;
-    const std::string entryPath = row[_columns.colPath];
-    if (entryPath.empty()) {
-        return;
-    }
-    if (row[_columns.colIsDir]) {
-        _navigate(entryPath, true, true);
-    }
-    else {
-        fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
-    }
+    _activate_entry(row[_columns.colPath], row[_columns.colIsDir]);
 }
 
 void CtWorkspaceBrowser::_on_back_clicked()
