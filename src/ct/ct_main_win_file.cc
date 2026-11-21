@@ -325,6 +325,7 @@ bool CtMainWin::file_open(const fs::path& filepath,
         CtDialogs::warning_dialog(str::xml_escape(error_or_warning), *this);
     }
 
+    update_project_panel(); // load the workspace bound to this document
     return true;
 }
 

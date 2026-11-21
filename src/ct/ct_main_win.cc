@@ -1394,7 +1394,9 @@ void CtMainWin::update_project_panel()
         // called from the constructor before the note tree exists; window_87_init refreshes the panel later
         return;
     }
-    _uCtProjectPanel->set_workspace(_pCtConfig->workspaceFolders, _pCtConfig->workspaceNoteShortcuts);
+    // workspace is bound to the opened document: each doc has its own <doc>.ctws sidecar
+    const std::string docPath = _uCtStorage ? _uCtStorage->get_file_path().string() : std::string{};
+    _uCtProjectPanel->attach_to_doc(docPath);
     const bool hasContent = not (_uCtProjectPanel->get_mounts().empty() and _uCtProjectPanel->get_note_shortcuts().empty());
     _uCtProjectPanel->set_visible(hasContent and _pCtConfig->rightSidebarVisible);
 }

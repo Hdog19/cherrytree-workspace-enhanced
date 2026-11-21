@@ -106,6 +106,59 @@ void CtProjectPanel::set_workspace(const std::vector<std::string>& mounts, const
 void CtProjectPanel::clear_workspace()
 {
     set_workspace({}, {});
+    _persist();
+}
+
+void CtProjectPanel::attach_to_doc(const std::string& docFilePath)
+{
+    if (docFilePath == _docFilePath) {
+        return; // already showing this document's workspace
+    }
+    _docFilePath = docFilePath;
+    if (docFilePath.empty()) {
+        // no document opened: start with an empty workspace
+        set_workspace({}, {});
+        return;
+    }
+    Glib::KeyFile kf;
+    try {
+        if (kf.load_from_file(_sidecar_path())) {
+            std::vector<std::string> mounts;
+            for (const Glib::ustring& s : kf.get_string_list("Workspace", "mounts")) {
+                mounts.push_back(s.raw());
+            }
+            std::vector<gint64> shortcuts;
+            for (const Glib::ustring& s : kf.get_string_list("Workspace", "noteShortcuts")) {
+                shortcuts.push_back(std::stoll(s.raw()));
+            }
+            set_workspace(mounts, shortcuts);
+            return;
+        }
+    }
+    catch (const Glib::Error&) {
+        // unreadable sidecar falls through
+    }
+    catch (const std::exception&) {
+        // malformed numbers etc. fall through
+    }
+    // no sidecar yet: one-time migration from the old global config, otherwise keep session state
+    CtConfig* pConfig = _pCtMainWin->get_ct_config();
+    if (not pConfig->workspaceFolders.empty() or not pConfig->workspaceNoteShortcuts.empty()) {
+        set_workspace(pConfig->workspaceFolders, pConfig->workspaceNoteShortcuts);
+        _persist(); // write the sidecar right away so this document owns the workspace
+        pConfig->workspaceFolders.clear();
+        pConfig->workspaceNoteShortcuts.clear(); // avoid seeding other documents with the same global list
+        return;
+    }
+    // keep the session state (e.g. built before this doc was saved) and take ownership of it now
+    if (not _mountFolders.empty() or not _noteShortcutIds.empty()) {
+        _persist();
+    }
+}
+
+std::string CtProjectPanel::_sidecar_path() const
+{
+    return _docFilePath + ".ctws";
 }
 
 bool CtProjectPanel::_is_empty_workspace() const
@@ -162,9 +215,26 @@ void CtProjectPanel::remove_mount(const std::string& folderPath)
 
 void CtProjectPanel::_persist()
 {
-    CtConfig* pConfig = _pCtMainWin->get_ct_config();
-    pConfig->workspaceFolders = _mountFolders;
-    pConfig->workspaceNoteShortcuts = _noteShortcutIds;
+    if (_docFilePath.empty()) {
+        return; // no document: workspace is session-only
+    }
+    Glib::KeyFile kf;
+    std::vector<Glib::ustring> mountStrs;
+    for (const std::string& folder : _mountFolders) {
+        mountStrs.push_back(folder);
+    }
+    std::vector<Glib::ustring> shortcutStrs;
+    for (gint64 nodeId : _noteShortcutIds) {
+        shortcutStrs.push_back(std::to_string(nodeId));
+    }
+    kf.set_string_list("Workspace", "mounts", mountStrs);
+    kf.set_string_list("Workspace", "noteShortcuts", shortcutStrs);
+    try {
+        kf.save_to_file(_sidecar_path());
+    }
+    catch (const Glib::Error& e) {
+        spdlog::warn("failed to save workspace sidecar {}: {}", _sidecar_path(), e.what().raw());
+    }
 }
 
 void CtProjectPanel::refresh()

@@ -50,6 +50,9 @@ public:
     // sync panel content from config; rebuilds only if the workspace definition changed
     void          set_workspace(const std::vector<std::string>& mounts, const std::vector<gint64>& noteShortcuts);
     void          clear_workspace();
+    // bind the panel to the currently opened document: loads <doc>.ctws sidecar next to it;
+    // empty path (no document) => empty workspace
+    void          attach_to_doc(const std::string& docFilePath);
 
     // mutate the workspace (also persists to config)
     bool          add_mount(const std::string& folderPath);     // false if invalid/duplicate
@@ -96,9 +99,11 @@ protected:
     void          _stop_file_monitors();
     void          _refresh_parent_of(const std::string& parentDirPath);
     void          _persist();
+    std::string   _sidecar_path() const;
 
 protected:
     CtMainWin* const _pCtMainWin;
+    std::string      _docFilePath; // document the workspace belongs to; empty = no document
     std::vector<std::string> _mountFolders;
     std::vector<gint64>      _noteShortcutIds;
     CtProjectPanelColumns _columns;
