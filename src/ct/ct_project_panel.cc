@@ -456,11 +456,16 @@ void CtProjectPanel::_on_row_activated(const Gtk::TreeModel::Path& path, Gtk::Tr
         return;
     }
     if (row[_columns.colIsDir]) {
-        fs::open_folderpath(fs::path{entryPath}, _pCtMainWin->get_ct_config());
+        // double click on a folder just toggles expand/collapse, like a tree node
+        if (_treeView.row_expanded(path)) {
+            _treeView.collapse_row(path);
+        }
+        else {
+            _treeView.expand_row(path, false); // lazy-loads children via _on_test_expand_row
+        }
+        return;
     }
-    else {
-        fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
-    }
+    fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
 }
 
 bool CtProjectPanel::_on_button_press_event(GdkEventButton* pEvent)
@@ -625,7 +630,25 @@ void CtProjectPanel::_on_menu_open()
     if (not iter) {
         return;
     }
-    _on_row_activated(_rTreeStore->get_path(iter), nullptr);
+    // the menu's "打开" keeps the explorer semantics: open externally
+    Gtk::TreeModel::Row row = *iter;
+    if (KindNoteShortcut == row[_columns.colKind]) {
+        CtTreeIter ctIter = _pCtMainWin->get_tree_store().get_node_from_node_id(row[_columns.colNodeId]);
+        if (ctIter) {
+            _pCtMainWin->get_tree_view().set_cursor_safe(ctIter);
+        }
+        return;
+    }
+    const std::string entryPath = row[_columns.colPath];
+    if (entryPath.empty()) {
+        return;
+    }
+    if (row[_columns.colIsDir]) {
+        fs::open_folderpath(fs::path{entryPath}, _pCtMainWin->get_ct_config());
+    }
+    else {
+        fs::open_filepath(fs::path{entryPath}, false, _pCtMainWin->get_ct_config());
+    }
 }
 
 void CtProjectPanel::_on_menu_open_in_file_manager()
