@@ -351,6 +351,12 @@ static bool _move_dir_with_fallback(const fs::path& dir_from, const fs::path& di
 
 bool CtStorageControl::try_reopen(Glib::ustring& error)
 {
+    if (not _storage) {
+        // no document opened yet (e.g. saving a brand new doc from a fresh window)
+        error = "storage is not initialized";
+        spdlog::error("!! try_reopen {}", error.raw());
+        return false;
+    }
     try {
         _storage->try_reopen();
         return true;
