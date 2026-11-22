@@ -432,6 +432,11 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
 {
     // filesystem paths of the expanded folders inside this subtree (may stay empty)
     std::set<std::string> expandedPaths;
+    // whether the parent row itself is expanded: erasing all its children makes GTK
+    // fold the row (a childless row cannot stay expanded), so it must be re-opened
+    // before restoring the descendants -- expand_row fails while the parent is folded
+    const bool parentExpanded = parentIter
+        ? _treeView.row_expanded(_rTreeStore->get_path(parentIter)) : false;
     // clear placeholder children
     if (parentIter) {
         // remember the expanded folders inside this subtree (by filesystem path),
@@ -529,8 +534,14 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
         }
     }
 
-    if (parentIter and not expandedPaths.empty()) {
-        _restore_expanded_rows(parentIter->children(), expandedPaths);
+    if (parentIter) {
+        // first re-open the row itself (erasing its children folded it), then the descendants
+        if (parentExpanded) {
+            _treeView.expand_row(_rTreeStore->get_path(parentIter), false);
+        }
+        if (not expandedPaths.empty()) {
+            _restore_expanded_rows(parentIter->children(), expandedPaths);
+        }
     }
 }
 
