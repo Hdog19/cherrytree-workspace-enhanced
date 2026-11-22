@@ -906,14 +906,30 @@ void CtTreeStore::tree_view_connect(Gtk::TreeView* pTreeView)
 
     Gtk::TreeViewColumn* pTVCol0 = pTreeView->get_column(CtTreeView::TITLE_COL_NUM);
     std::vector<Gtk::CellRenderer*> cellRenderers0 = pTVCol0->get_cells();
+    // explorer-like mouse-over shading on the hovered row (CtTreeView tracks the cursor)
+    CtTreeView* pCtTreeView = dynamic_cast<CtTreeView*>(pTreeView);
+    auto applyShading = [pCtTreeView](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter) {
+        if (pCtTreeView) {
+            pCtTreeView->apply_hover_shading(pCell, treeIter);
+        }
+    };
+    if (not cellRenderers0.empty()) {
+        pTVCol0->set_cell_data_func(
+            *cellRenderers0[0],
+            [applyShading](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter){
+                applyShading(pCell, treeIter);
+            }
+        );
+    }
     if (cellRenderers0.size() > 1) {
         Gtk::CellRendererPixbuf* pCellRendererAux = dynamic_cast<Gtk::CellRendererPixbuf*>(cellRenderers0[1]);
         if (nullptr != pCellRendererAux) {
             pTVCol0->set_cell_data_func(
                 *pCellRendererAux,
-                [this](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter){
+                [this, applyShading](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter){
                     pCell->property_visible() = not _pCtMainWin->get_ct_config()->auxIconHide
                                                 and bool(treeIter->get_value(_columns.rColPixbufAux));
+                    applyShading(pCell, treeIter);
                 }
             );
         }
@@ -923,7 +939,7 @@ void CtTreeStore::tree_view_connect(Gtk::TreeView* pTreeView)
                 pTVCol0->add_attribute(pCellRendererText->property_weight(), _columns.colWeight);
                 pTVCol0->set_cell_data_func(
                     *pCellRendererText,
-                    [this](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter){
+                    [this, applyShading](Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& treeIter){
                         Gtk::TreeRow row = *treeIter;
                         if (row.get_value(_columns.colForeground).empty()) {
                             dynamic_cast<Gtk::CellRendererText*>(pCell)->property_foreground() = _pCtMainWin->get_ct_config()->ttDefFg;
@@ -931,6 +947,7 @@ void CtTreeStore::tree_view_connect(Gtk::TreeView* pTreeView)
                         else {
                             dynamic_cast<Gtk::CellRendererText*>(pCell)->property_foreground() = row.get_value(_columns.colForeground);
                         }
+                        applyShading(pCell, treeIter);
                     }
                 );
             }

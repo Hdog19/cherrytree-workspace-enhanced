@@ -154,10 +154,15 @@ public:
     void set_tree_node_name_wrap_width(const bool wrap_enabled, const int wrap_width);
     void set_tooltips_enable(const bool on);
 
+    // explorer-like mouse-over shading: call from cell data funcs of every renderer
+    void apply_hover_shading(Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& iter);
+
 private:
     bool _on_query_tooltip(int x, int y, bool keyboard_tooltip, const Glib::RefPtr<Gtk::Tooltip>& tooltip);
 
     CtConfig* const _pCtConfig;
+    Gtk::TreeModel::Path _hoverPath;
+    bool                 _hoverValid{false};
 };
 
 class CtApp;

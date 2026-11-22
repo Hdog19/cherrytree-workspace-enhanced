@@ -162,6 +162,50 @@ CtTreeView::CtTreeView(CtConfig* pCtConfig)
     if (_pCtConfig->treeTooltips) {
         set_tooltips_enable(true/*on*/);
     }
+#if GTKMM_MAJOR_VERSION < 4
+    // explorer-like mouse-over shading: track the row under the cursor and repaint
+    add_events(Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK);
+    signal_motion_notify_event().connect([this](GdkEventMotion* pEvent) {
+        Gtk::TreeModel::Path path;
+        Gtk::TreeViewColumn* pColumn{nullptr};
+        int cellX{0}, cellY{0};
+        const bool has = get_path_at_pos((int)pEvent->x, (int)pEvent->y, path, pColumn, cellX, cellY);
+        const bool changed = (has != _hoverValid) or (has and path != _hoverPath);
+        _hoverValid = has;
+        if (has) {
+            _hoverPath = path;
+        }
+        if (changed) {
+            queue_draw();
+        }
+        return false;
+    });
+    signal_leave_notify_event().connect([this](GdkEventCrossing*) {
+        if (_hoverValid) {
+            _hoverValid = false;
+            queue_draw();
+        }
+        return false;
+    });
+#endif
+}
+
+void CtTreeView::apply_hover_shading(Gtk::CellRenderer* pCell, const Gtk::TreeModel::iterator& iter)
+{
+    bool highlight = false;
+    if (_hoverValid and iter) {
+        const Gtk::TreeModel::Path path = get_model()->get_path(iter);
+        highlight = (path == _hoverPath) and not get_selection()->is_selected(path);
+    }
+    if (highlight) {
+        // a soft translucent shadow, same as the workspace views
+        static const Gdk::RGBA hoverColor = Gdk::RGBA{"rgba(0,0,0,0.08)"};
+        pCell->property_cell_background_set() = true;
+        pCell->property_cell_background_rgba() = hoverColor;
+    }
+    else {
+        pCell->property_cell_background_set() = false;
+    }
 }
 
 void CtTreeView::set_tooltips_enable(const bool on)
