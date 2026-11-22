@@ -75,6 +75,10 @@ protected:
     bool          _on_test_expand_row(const Gtk::TreeModel::iterator& iter, const Gtk::TreeModel::Path& path);
     void          _on_row_activated(const Gtk::TreeModel::Path& path, Gtk::TreeViewColumn* column);
     bool          _on_button_press_event(GdkEventButton* pEvent);
+    // mouse-over shading on tree rows
+    void          _hover_paint(Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter);
+    Gtk::TreeModel::Path _hoverPath;
+    bool          _hoverValid{false};
     void          _show_context_menu(GdkEventButton* pEvent, const Gtk::TreeModel::Path& path);
     void          _on_menu_open();
     void          _on_menu_open_in_file_manager();

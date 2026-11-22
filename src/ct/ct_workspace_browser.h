@@ -81,6 +81,14 @@ protected:
     void        _on_icon_selection_changed();
     void        _on_icon_item_activated(const Gtk::TreeModel::Path& path);
     bool        _on_icon_button_press(GdkEventButton* pEvent);
+    // mouse-over shading on the details list and the icons view
+    void        _hover_paint(Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter,
+                             const Gtk::TreeModel::Path& hoverPath, bool hoverValid, bool isSelected);
+    Gtk::TreeModel::Path _hoverPath;
+    bool        _hoverValid{false};
+    Gtk::TreeModel::Path _iconHoverPath;
+    bool        _iconHoverValid{false};
+    Gtk::CellRendererText* _pIconTextCell{nullptr};
     bool        _on_icon_key_press(GdkEventKey* pEvent);
     bool        _handle_key_press(GdkEventKey* pEvent, const std::vector<std::string>& selPaths);
     std::vector<std::string> _list_sel_paths();

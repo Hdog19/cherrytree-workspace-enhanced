@@ -73,12 +73,64 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
         [this](GdkEventButton* pEvent) { return _on_list_button_press(pEvent); }, false);
     _listView.signal_key_press_event().connect(
         [this](GdkEventKey* pEvent) { return _on_list_key_press(pEvent); }, false);
+    // mouse-over shading: track the row under the cursor and repaint
+    _listView.add_events(Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK);
+    _listView.signal_motion_notify_event().connect([this](GdkEventMotion* pEvent) {
+        Gtk::TreeModel::Path path;
+        Gtk::TreeViewColumn* pColumn{nullptr};
+        int cellX{0}, cellY{0};
+        const bool has = _listView.get_path_at_pos((int)pEvent->x, (int)pEvent->y, path, pColumn, cellX, cellY);
+        const bool changed = (has != _hoverValid) or (has and path != _hoverPath);
+        _hoverValid = has;
+        if (has) {
+            _hoverPath = path;
+        }
+        if (changed) {
+            _listView.queue_draw();
+        }
+        return false;
+    }, false);
+    _listView.signal_leave_notify_event().connect([this](GdkEventCrossing*) {
+        if (_hoverValid) {
+            _hoverValid = false;
+            _listView.queue_draw();
+        }
+        return false;
+    }, false);
 #endif
+    // shade every renderer of every column on the hovered row
+    for (Gtk::TreeViewColumn* pColumn : _listView.get_columns()) {
+        const auto cells = pColumn->get_cells();
+        for (Gtk::CellRenderer* pRenderer : cells) {
+            pColumn->set_cell_data_func(*pRenderer,
+                [this](Gtk::CellRenderer* pRenderer_, const Gtk::TreeModel::const_iterator& iter) {
+                    Gtk::TreeModel::Path path;
+                    bool isSelected = false;
+                    if (_hoverValid and iter) {
+                        path = _rListStore->get_path(iter);
+                        isSelected = _listView.get_selection()->is_selected(path);
+                    }
+                    _hover_paint(pRenderer_, iter, _hoverPath, _hoverValid, isSelected);
+                });
+        }
+    }
 
-    // icons view (large / extra-large, thumbnails for images) sharing the same model
+    // icons view (large / extra-large, thumbnails for images) sharing the same model;
+    // renderers are packed manually so the mouse-over shading can be drawn per item
     _iconView.set_model(_rListStore);
-    _iconView.set_pixbuf_column(_columns.colIcon);
-    _iconView.set_text_column(_columns.colName);
+    {
+        Gtk::CellRendererPixbuf* pIconCell = Gtk::manage(new Gtk::CellRendererPixbuf);
+        _iconView.pack_start(*pIconCell, false);
+        _iconView.add_attribute(pIconCell->property_pixbuf(), _columns.colIcon);
+        _pIconTextCell = Gtk::manage(new Gtk::CellRendererText);
+        _pIconTextCell->property_alignment() = Pango::ALIGN_CENTER;
+        _pIconTextCell->property_xalign() = 0.5f;
+        _pIconTextCell->property_wrap_width() = 96;
+        _pIconTextCell->property_wrap_mode() = Pango::WRAP_CHAR;
+        _pIconTextCell->property_ellipsize() = Pango::ELLIPSIZE_END;
+        _iconView.pack_start(*_pIconTextCell, true);
+        _iconView.add_attribute(_pIconTextCell->property_text(), _columns.colName);
+    }
     _iconView.set_spacing(4);
     _iconView.set_item_padding(3);
     _iconView.set_item_width(96);
@@ -89,7 +141,37 @@ CtWorkspaceBrowser::CtWorkspaceBrowser(CtMainWin* pCtMainWin)
         [this](GdkEventButton* pEvent) { return _on_icon_button_press(pEvent); }, false);
     _iconView.signal_key_press_event().connect(
         [this](GdkEventKey* pEvent) { return _on_icon_key_press(pEvent); }, false);
+    // mouse-over shading: track the item under the cursor and repaint
+    _iconView.add_events(Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK);
+    _iconView.signal_motion_notify_event().connect([this](GdkEventMotion* pEvent) {
+        const Gtk::TreeModel::Path hitPath = _iconView.get_path_at_pos((int)pEvent->x, (int)pEvent->y);
+        const bool changed = ((not hitPath.empty()) != _iconHoverValid)
+            or (not hitPath.empty() and hitPath != _iconHoverPath);
+        _iconHoverValid = not hitPath.empty();
+        if (_iconHoverValid) {
+            _iconHoverPath = hitPath;
+        }
+        if (changed) {
+            _iconView.queue_draw();
+        }
+        return false;
+    }, false);
+    _iconView.signal_leave_notify_event().connect([this](GdkEventCrossing*) {
+        if (_iconHoverValid) {
+            _iconHoverValid = false;
+            _iconView.queue_draw();
+        }
+        return false;
+    }, false);
 #endif
+    {
+        for (Gtk::CellRenderer* pRenderer : _iconView.get_cells()) {
+            _iconView.set_cell_data_func(*pRenderer,
+                [this, pRenderer](const Gtk::TreeIter& iter) {
+                    _hover_paint(pRenderer, iter, _iconHoverPath, _iconHoverValid, false);
+                });
+        }
+    }
     Gtk::ScrolledWindow* pIconScrolled = Gtk::manage(new Gtk::ScrolledWindow{});
     pIconScrolled->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
 
@@ -466,6 +548,24 @@ void CtWorkspaceBrowser::_clear_details()
 
 // ---- explorer-like view modes -------------------------------------------
 
+void CtWorkspaceBrowser::_hover_paint(Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter,
+                                      const Gtk::TreeModel::Path& hoverPath, bool hoverValid, bool isSelected)
+{
+    bool highlight = false;
+    if (hoverValid and iter and not isSelected) {
+        highlight = (_rListStore->get_path(iter) == hoverPath);
+    }
+    if (highlight) {
+        // explorer-like mouse-over shading (a soft translucent shadow)
+        static const Gdk::RGBA hoverColor = Gdk::RGBA{"rgba(0,0,0,0.08)"};
+        pRenderer->property_cell_background_set() = true;
+        pRenderer->property_cell_background_rgba() = hoverColor;
+    }
+    else {
+        pRenderer->property_cell_background_set() = false;
+    }
+}
+
 int CtWorkspaceBrowser::_view_icon_size() const
 {
     switch (_viewMode) {
@@ -490,6 +590,9 @@ void CtWorkspaceBrowser::_set_view_mode(ViewMode mode)
             _iconView.set_item_width(150);
             _viewStack.set_visible_child("icons");
             break;
+    }
+    if (_pIconTextCell) {
+        _pIconTextCell->property_wrap_width() = mode == ViewMode::ExtraLargeIcons ? 150 : 96;
     }
     _refresh_current(); // refill the model with icons of the new size
 }

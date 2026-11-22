@@ -52,6 +52,12 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         Gtk::CellRendererText* pCellText = Gtk::manage(new Gtk::CellRendererText);
         pColumn->pack_start(*pCellText, true);
         pColumn->add_attribute(pCellText->property_text(), _columns.colName);
+        // mouse-over shading: shade both renderers of the hovered row
+        const auto hoverFunc = [this](Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter) {
+            _hover_paint(pRenderer, iter);
+        };
+        pColumn->set_cell_data_func(*pCellIcon, hoverFunc);
+        pColumn->set_cell_data_func(*pCellText, hoverFunc);
         _treeView.append_column(*pColumn);
     }
 
@@ -61,6 +67,32 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         sigc::mem_fun(*this, &CtProjectPanel::_on_row_activated)));
     _sigcConnections.push_back(_treeView.signal_button_press_event().connect(
         [this](GdkEventButton* pEvent) { return _on_button_press_event(pEvent); }, false));
+#if GTKMM_MAJOR_VERSION < 4
+    // mouse-over shading: track the row under the cursor and repaint
+    _treeView.add_events(Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK);
+    _sigcConnections.push_back(_treeView.signal_motion_notify_event().connect([this](GdkEventMotion* pEvent) {
+        Gtk::TreeModel::Path path;
+        Gtk::TreeViewColumn* pColumn{nullptr};
+        int cellX{0}, cellY{0};
+        const bool has = _treeView.get_path_at_pos((int)pEvent->x, (int)pEvent->y, path, pColumn, cellX, cellY);
+        const bool changed = (has != _hoverValid) or (has and path != _hoverPath);
+        _hoverValid = has;
+        if (has) {
+            _hoverPath = path;
+        }
+        if (changed) {
+            _treeView.queue_draw();
+        }
+        return false;
+    }));
+    _sigcConnections.push_back(_treeView.signal_leave_notify_event().connect([this](GdkEventCrossing*) {
+        if (_hoverValid) {
+            _hoverValid = false;
+            _treeView.queue_draw();
+        }
+        return false;
+    }));
+#endif
     // workspace <-> edit-area link: selecting a filesystem entry browses it in the edit area
     _sigcConnections.push_back(_treeView.signal_cursor_changed().connect([this]() {
         Gtk::TreeModel::Path path;
@@ -420,6 +452,24 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
             dummyRow[_columns.colKind] = -1;
             dummyRow[_columns.colNodeId] = 0;
         }
+    }
+}
+
+void CtProjectPanel::_hover_paint(Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter)
+{
+    bool highlight = false;
+    if (_hoverValid and iter) {
+        const Gtk::TreeModel::Path path = _rTreeStore->get_path(iter);
+        highlight = (path == _hoverPath) and not _treeView.get_selection()->is_selected(path);
+    }
+    if (highlight) {
+        // explorer-like mouse-over shading (a soft translucent shadow)
+        static const Gdk::RGBA hoverColor = Gdk::RGBA{"rgba(0,0,0,0.08)"};
+        pRenderer->property_cell_background_set() = true;
+        pRenderer->property_cell_background_rgba() = hoverColor;
+    }
+    else {
+        pRenderer->property_cell_background_set() = false;
     }
 }
 
