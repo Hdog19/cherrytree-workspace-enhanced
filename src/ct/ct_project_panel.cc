@@ -43,8 +43,10 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         pHeaderBox->pack_start(*pBtn, Gtk::PACK_SHRINK);
     };
     addQuickBtn("folder-new", "新建同级文件夹", sigc::mem_fun(*this, &CtProjectPanel::_new_sibling_folder));
-    addQuickBtn("go-up", "移动到上一级（父目录）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_up));
-    addQuickBtn("go-down", "移动到下一级（下方相邻的文件夹节点）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_down));
+    addQuickBtn("go-previous", "左移（升级）：移出当前文件夹，减少缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_up));
+    addQuickBtn("go-next", "右移（降级）：移入上一个兄弟文件夹，增加缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_into_prev_folder));
+    addQuickBtn("go-up", "上移：移到根文件夹的第一层", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_to_root));
+    addQuickBtn("go-down", "下移（下一级）：移入下方相邻的文件夹节点", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_down));
     pack_start(*pHeaderBox, Gtk::PACK_SHRINK);
 
     // filename search box (Enter to search across all mounted folders)
@@ -332,24 +334,22 @@ void CtProjectPanel::_populate_root()
         return;
     }
 
-    // remember expanded folders (recursively) to restore them after the rescan
-    std::vector<std::string> expandedPathStrings;
+    // remember expanded folders by filesystem path (stable across reorders and moves;
+    // tree row numbers shift when entries are added/removed, which used to collapse everything)
+    std::set<std::string> expandedPaths;
     std::function<void(const Gtk::TreeModel::Children&)> collectExpanded =
         [&](const Gtk::TreeModel::Children& children) {
             for (auto& row : children) {
-                Gtk::TreeModel::Path path = _rTreeStore->get_path(row);
-                if (_treeView.row_expanded(path)) {
-                    expandedPathStrings.push_back(path.to_string());
+                if ((bool)row[_columns.colDummy]) {
+                    continue;
+                }
+                if (_treeView.row_expanded(_rTreeStore->get_path(row))) {
+                    expandedPaths.insert((std::string)row[_columns.colPath]);
                     collectExpanded(row.children());
                 }
             }
         };
     collectExpanded(_rTreeStore->children());
-    // shallow paths first, so lazy population fills ancestors before nested paths are expanded
-    std::sort(expandedPathStrings.begin(), expandedPathStrings.end(),
-              [](const std::string& a, const std::string& b) {
-                  return std::count(a.begin(), a.end(), ':') < std::count(b.begin(), b.end(), ':');
-              });
 
     _rTreeStore->clear();
 
@@ -396,10 +396,8 @@ void CtProjectPanel::_populate_root()
         }
     }
 
-    // restore expansion (in path order collected above)
-    for (const std::string& pathStr : expandedPathStrings) {
-        _treeView.expand_row(Gtk::TreeModel::Path(pathStr), false);
-    }
+    // restore expansion (deeper levels lazy-fill synchronously while expanding)
+    _restore_expanded_rows(_rTreeStore->children(), expandedPaths);
 }
 
 bool CtProjectPanel::_is_row_dummy(const Gtk::TreeModel::iterator& iter)
@@ -485,22 +483,56 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
     }
 
     if (parentIter and not expandedPaths.empty()) {
-        // restore the expanded folders: each expand_row lazily fills its level
-        // synchronously, so deeper levels can be restored right after
-        std::function<void(const Gtk::TreeModel::Children&)> restoreExpanded =
-            [&](const Gtk::TreeModel::Children& children) {
-                for (auto& row : children) {
-                    const std::string rowFsPath = row[_columns.colPath];
-                    if ((bool)row[_columns.colIsDir] and not (bool)row[_columns.colDummy]
-                        and expandedPaths.count(rowFsPath))
-                    {
-                        _treeView.expand_row(_rTreeStore->get_path(row), false);
-                        restoreExpanded(row.children());
+        _restore_expanded_rows(parentIter->children(), expandedPaths);
+    }
+}
+
+// recursive helper: expand every row whose filesystem path was expanded before a rescan;
+// each expand_row lazily fills its level synchronously, so deeper levels can follow
+void CtProjectPanel::_restore_expanded_rows(const Gtk::TreeModel::Children& children,
+                                            const std::set<std::string>& expandedPaths)
+{
+    for (auto& row : children) {
+        const std::string rowFsPath = row[_columns.colPath];
+        if ((bool)row[_columns.colIsDir] and not (bool)row[_columns.colDummy]
+            and not rowFsPath.empty() and expandedPaths.count(rowFsPath))
+        {
+            _treeView.expand_row(_rTreeStore->get_path(row), false);
+            _restore_expanded_rows(row.children(), expandedPaths);
+        }
+    }
+}
+
+Gtk::TreeModel::iterator CtProjectPanel::_find_row_by_fs_path(const std::string& fsPath)
+{
+    std::function<Gtk::TreeModel::iterator(const Gtk::TreeModel::Children&)> f_find =
+        [&](const Gtk::TreeModel::Children& children) -> Gtk::TreeModel::iterator {
+            for (auto& row : children) {
+                if ((bool)row[_columns.colDummy]) {
+                    continue;
+                }
+                const std::string rowPath = row[_columns.colPath];
+                if (rowPath == fsPath) {
+                    return Gtk::TreeModel::iterator{row};
+                }
+                if ((bool)row[_columns.colIsDir]) {
+                    Gtk::TreeModel::iterator found = f_find(row.children());
+                    if (found) {
+                        return found;
                     }
                 }
-            };
-        restoreExpanded(parentIter->children());
+            }
+            return {};
+        };
+    return f_find(_rTreeStore->children());
+}
+
+Gtk::TreeModel::iterator CtProjectPanel::_root_row_of(Gtk::TreeModel::iterator iter)
+{
+    while (iter and iter->parent()) {
+        iter = iter->parent();
     }
+    return iter;
 }
 
 void CtProjectPanel::_hover_paint(Gtk::CellRenderer* pRenderer, const Gtk::TreeModel::const_iterator& iter)
@@ -837,6 +869,22 @@ void CtProjectPanel::_move_entry_to(const fs::path& src, const fs::path& dstDir)
         CtDialogs::warning_dialog("目标位置已存在同名条目：\n" + dst.string(), *static_cast<Gtk::Window*>(_pCtMainWin));
         return;
     }
+    // remember which parts of the moved subtree were expanded (by filesystem path),
+    // so they stay expanded at the new location after the refreshes below
+    std::set<std::string> movedExpanded;
+    Gtk::TreeModel::iterator srcIter = _find_row_by_fs_path(src.string());
+    if (srcIter) {
+        std::function<void(Gtk::TreeModel::iterator)> collectExpanded =
+            [&](Gtk::TreeModel::iterator it) {
+                if (_treeView.row_expanded(_rTreeStore->get_path(it))) {
+                    movedExpanded.insert((*it)[_columns.colPath]);
+                }
+                for (auto& childRow : it->children()) {
+                    collectExpanded(Gtk::TreeModel::iterator{childRow});
+                }
+            };
+        collectExpanded(srcIter);
+    }
     if (not fs::move_file(src, dst)) {
         CtDialogs::warning_dialog("移动失败：" + src.string(), *static_cast<Gtk::Window*>(_pCtMainWin));
         spdlog::warn("workspace move failed: {} -> {}", src.string(), dst.string());
@@ -846,6 +894,41 @@ void CtProjectPanel::_move_entry_to(const fs::path& src, const fs::path& dstDir)
     // rescan both the source dir row and the target dir row (if present in the tree)
     _refresh_parent_of(Glib::path_get_dirname(src.string()));
     _refresh_parent_of(dstDir.string());
+    // restore the moved subtree's expansion at its new location (remap src -> dst prefixes)
+    if (not movedExpanded.empty()) {
+        const std::string srcStr = src.string();
+        const std::string dstStr = dst.string();
+        std::set<std::string> mappedPaths;
+        for (const std::string& oldPath : movedExpanded) {
+            if (oldPath == srcStr) {
+                mappedPaths.insert(dstStr);
+            }
+            else if (oldPath.size() > srcStr.size()
+                     and oldPath.compare(0, srcStr.size(), srcStr) == 0
+                     and (oldPath[srcStr.size()] == '\\' or oldPath[srcStr.size()] == '/'))
+            {
+                mappedPaths.insert(dstStr + oldPath.substr(srcStr.size()));
+            }
+        }
+        if (Gtk::TreeModel::iterator dstIter = _find_row_by_fs_path(dstStr)) {
+            if (mappedPaths.count(dstStr)) {
+                _treeView.expand_row(_rTreeStore->get_path(dstIter), false);
+            }
+            std::function<void(const Gtk::TreeModel::Children&)> restoreSubtree =
+                [&](const Gtk::TreeModel::Children& children) {
+                    for (auto& row : children) {
+                        const std::string rowFsPath = row[_columns.colPath];
+                        if ((bool)row[_columns.colIsDir] and not (bool)row[_columns.colDummy]
+                            and mappedPaths.count(rowFsPath))
+                        {
+                            _treeView.expand_row(_rTreeStore->get_path(row), false);
+                            restoreSubtree(row.children());
+                        }
+                    }
+                };
+            restoreSubtree(dstIter->children());
+        }
+    }
 }
 
 void CtProjectPanel::_new_sibling_folder()
@@ -913,6 +996,58 @@ void CtProjectPanel::_move_entry_down()
     }
     if (targetDir.empty()) {
         CtDialogs::warning_dialog("所选节点下方没有相邻的文件夹节点，无法移动到下一级",
+                                  *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _move_entry_to(fs::path{(*iter)[_columns.colPath]}, fs::path{targetDir});
+}
+
+void CtProjectPanel::_move_entry_to_root()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    if (not iter->parent()) {
+        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    const std::string rootPath = (*_root_row_of(iter))[_columns.colPath];
+    const std::string parentPath = (*iter->parent())[_columns.colPath];
+    if (parentPath == rootPath) {
+        CtDialogs::warning_dialog("已在根文件夹的第一层", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _move_entry_to(fs::path{(*iter)[_columns.colPath]}, fs::path{rootPath});
+}
+
+void CtProjectPanel::_move_entry_into_prev_folder()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    if (not iter->parent()) {
+        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    // cherrytree-like demote: become a child of the previous sibling;
+    // the nearest folder sibling above the row (siblings of a non-root row stay in the same root)
+    Gtk::TreeModel::iterator it = iter;
+    std::string targetDir;
+    for (--it; it; --it) {
+        Gtk::TreeModel::Row row = *it;
+        if (KindFs == (int)row[_columns.colKind] and not (bool)row[_columns.colDummy]
+            and (bool)row[_columns.colIsDir] and not ((std::string)row[_columns.colPath]).empty())
+        {
+            targetDir = row[_columns.colPath];
+            break;
+        }
+    }
+    if (targetDir.empty()) {
+        CtDialogs::warning_dialog("所选节点上方没有相邻的文件夹节点，无法降级",
                                   *static_cast<Gtk::Window*>(_pCtMainWin));
         return;
     }

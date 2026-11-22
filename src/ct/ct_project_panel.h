@@ -16,6 +16,7 @@
 
 #include <gtkmm.h>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -88,13 +89,21 @@ protected:
     void          _on_menu_new_folder();
     void          _on_menu_rename();
     void          _on_menu_delete();
-    // quick action bar: new sibling folder / move entry to the parent dir / into the next folder
+    // quick action bar (arrow buttons, cherrytree-like node moves mapped to the filesystem):
+    // up = to the mount root first level, down = into the next folder sibling,
+    // left = promote (out of the current folder), right = demote (into the previous sibling folder)
     void          _new_sibling_folder();
     void          _move_entry_up();
     void          _move_entry_down();
+    void          _move_entry_to_root();
+    void          _move_entry_into_prev_folder();
     bool          _create_folder_in(const std::string& dirPath);
     void          _move_entry_to(const fs::path& src, const fs::path& dstDir);
     Gtk::TreeModel::iterator _selected_fs_entry();
+    Gtk::TreeModel::iterator _root_row_of(Gtk::TreeModel::iterator iter);
+    Gtk::TreeModel::iterator _find_row_by_fs_path(const std::string& fsPath);
+    void          _restore_expanded_rows(const Gtk::TreeModel::Children& children,
+                                         const std::set<std::string>& expandedPaths);
     void          _on_menu_refresh_mount();
     void          _on_menu_unmount();
     void          _on_menu_jump_note();
