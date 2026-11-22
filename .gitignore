@@ -22,3 +22,5 @@ cmake_test_discovery_*.json
 repro_save*.sh
 check_occupy.sh
 build_portable.sh
+restructure_portable.sh
+readme2.md
