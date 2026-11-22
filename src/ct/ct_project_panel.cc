@@ -43,10 +43,10 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
         pHeaderBox->pack_start(*pBtn, Gtk::PACK_SHRINK);
     };
     addQuickBtn("folder-new", "新建同级文件夹", sigc::mem_fun(*this, &CtProjectPanel::_new_sibling_folder));
-    addQuickBtn("go-previous", "左移（升级）：移出当前文件夹，减少缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_up));
-    addQuickBtn("go-next", "右移（降级）：移入上一个兄弟文件夹，增加缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_into_prev_folder));
-    addQuickBtn("go-up", "上移：移到根文件夹的第一层", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_to_root));
-    addQuickBtn("go-down", "下移（下一级）：移入下方相邻的文件夹节点", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_down));
+    addQuickBtn("go-up", "上移：在同级节点中上移（不改变层级）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_up));
+    addQuickBtn("go-down", "下移：在同级节点中下移（不改变层级）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_down));
+    addQuickBtn("go-previous", "左移（升级）：移出当前文件夹，减少缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_promote));
+    addQuickBtn("go-next", "右移（降级）：移入上一个兄弟文件夹，增加缩进", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_demote));
     pack_start(*pHeaderBox, Gtk::PACK_SHRINK);
 
     // filename search box (Enter to search across all mounted folders)
@@ -210,6 +210,21 @@ void CtProjectPanel::attach_to_doc(const std::string& docFilePath)
             for (const Glib::ustring& s : kf.get_string_list("Workspace", "noteShortcuts")) {
                 shortcuts.push_back(std::stoll(s.raw()));
             }
+            if (kf.has_group("EntryOrder")) {
+                for (const Glib::ustring& key : kf.get_keys("EntryOrder")) {
+                    const std::string hexKey = key.raw();
+                    std::string dirPath;
+                    dirPath.reserve(hexKey.size() / 2);
+                    for (size_t i = 0; i + 1 < hexKey.size(); i += 2) {
+                        dirPath.push_back(static_cast<char>(std::stoi(hexKey.substr(i, 2), nullptr, 16)));
+                    }
+                    std::vector<std::string> names;
+                    for (const Glib::ustring& s : kf.get_string_list("EntryOrder", key)) {
+                        names.push_back(s.raw());
+                    }
+                    _entryOrder[dirPath] = std::move(names);
+                }
+            }
             set_workspace(mounts, shortcuts);
             return;
         }
@@ -299,6 +314,11 @@ void CtProjectPanel::_persist()
     }
     kf.set_string_list("Workspace", "mounts", mountStrs);
     kf.set_string_list("Workspace", "noteShortcuts", shortcutStrs);
+    // custom per-directory entry order (up/down buttons); keys are hex-encoded paths
+    for (const auto& pair : _entryOrder) {
+        kf.set_string_list("EntryOrder", _order_key_encode(pair.first),
+                           std::vector<Glib::ustring>(pair.second.begin(), pair.second.end()));
+    }
     try {
         kf.save_to_file(_sidecar_path());
     }
@@ -448,16 +468,43 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
         return;
     }
 
-    // directories first, then alphabetical (case insensitive)
-    std::sort(entries.begin(), entries.end(),
-        [](const std::pair<std::string, bool>& a, const std::pair<std::string, bool>& b) {
-            if (a.second != b.second) {
-                return a.second; // dirs first
+    // display order: strictly the recorded custom order (the workspace never auto-sorts
+    // once a directory has been seen); first visit records "dirs first + alphabetical" as
+    // the initial order; entries that appeared later are appended alphabetically;
+    // recorded entries that no longer exist are pruned
+    const std::vector<std::string>& order = _ensure_entry_order(dirPath);
+    {
+        std::map<std::string, bool> byName;
+        for (auto& entry : entries) {
+            byName[entry.first] = entry.second;
+        }
+        std::vector<std::pair<std::string, bool>> ordered;
+        for (const std::string& name : order) {
+            auto found = byName.find(name);
+            if (found != byName.end()) {
+                ordered.emplace_back(name, found->second);
+                byName.erase(found);
             }
-            const Glib::ustring ua = Glib::ustring(a.first).lowercase();
-            const Glib::ustring ub = Glib::ustring(b.first).lowercase();
-            return ua < ub;
-        });
+        }
+        std::vector<std::string> rest;
+        for (auto& pair : byName) {
+            rest.push_back(pair.first);
+        }
+        std::sort(rest.begin(), rest.end(),
+            [](const std::string& a, const std::string& b) {
+                return Glib::ustring(a).lowercase() < Glib::ustring(b).lowercase();
+            });
+        for (const std::string& name : rest) {
+            ordered.emplace_back(name, byName[name]);
+        }
+        entries = std::move(ordered);
+        // remember the final order (prunes deleted entries, records appended ones)
+        std::vector<std::string>& storedOrder = _entryOrder[dirPath];
+        storedOrder.clear();
+        for (auto& entry : entries) {
+            storedOrder.push_back(entry.first);
+        }
+    }
 
     for (const auto& entry : entries) {
         const std::string fullPath = Glib::build_filename(dirPath, entry.first);
@@ -891,6 +938,27 @@ void CtProjectPanel::_move_entry_to(const fs::path& src, const fs::path& dstDir)
         return;
     }
     spdlog::debug("workspace moved {} -> {}", src.string(), dst.string());
+    // keep the custom order tables in sync: drop from the source dir, append to the target
+    {
+        const std::string name = src.filename().string();
+        const std::string srcDirStr = Glib::path_get_dirname(src.string());
+        auto itSrc = _entryOrder.find(srcDirStr);
+        if (itSrc != _entryOrder.end()) {
+            auto posName = std::find(itSrc->second.begin(), itSrc->second.end(), name);
+            if (posName != itSrc->second.end()) {
+                itSrc->second.erase(posName);
+            }
+        }
+        auto itDst = _entryOrder.find(dstDir.string());
+        if (itDst != _entryOrder.end()) {
+            auto posName = std::find(itDst->second.begin(), itDst->second.end(), name);
+            if (posName != itDst->second.end()) {
+                itDst->second.erase(posName);
+            }
+            itDst->second.push_back(name);
+        }
+        _persist();
+    }
     // rescan both the source dir row and the target dir row (if present in the tree)
     _refresh_parent_of(Glib::path_get_dirname(src.string()));
     _refresh_parent_of(dstDir.string());
@@ -944,7 +1012,130 @@ void CtProjectPanel::_new_sibling_folder()
     _create_folder_in(dirPath);
 }
 
+// hex-encode a directory path into a KeyFile-safe key for the order table
+std::string CtProjectPanel::_order_key_encode(const std::string& dirPath)
+{
+    static const char* hexDigits = "0123456789abcdef";
+    std::string key;
+    key.reserve(dirPath.size() * 2);
+    for (unsigned char c : dirPath) {
+        key.push_back(hexDigits[c >> 4]);
+        key.push_back(hexDigits[c & 0x0f]);
+    }
+    return key;
+}
+
+// the custom order of a directory's entries; on the first visit it starts as
+// "directories first, then alphabetical" and is fixed from then on (no auto-sorting)
+std::vector<std::string>& CtProjectPanel::_ensure_entry_order(const std::string& dirPath)
+{
+    auto it = _entryOrder.find(dirPath);
+    if (it != _entryOrder.end()) {
+        return it->second;
+    }
+    std::vector<std::pair<std::string, bool>> entries;
+    try {
+        Glib::Dir dir{dirPath};
+        for (const std::string& name : dir) {
+            if (not name.empty() and name[0] == '.') {
+                continue;
+            }
+            const std::string fullPath = Glib::build_filename(dirPath, name);
+            entries.emplace_back(name, Glib::file_test(fullPath, Glib::FILE_TEST_IS_DIR));
+        }
+    }
+    catch (const Glib::Error&) {
+        // unreadable dir: keep an empty order
+    }
+    std::sort(entries.begin(), entries.end(),
+        [](const std::pair<std::string, bool>& a, const std::pair<std::string, bool>& b) {
+            if (a.second != b.second) {
+                return a.second; // dirs first
+            }
+            return Glib::ustring(a.first).lowercase() < Glib::ustring(b.first).lowercase();
+        });
+    std::vector<std::string> names;
+    names.reserve(entries.size());
+    for (auto& entry : entries) {
+        names.push_back(entry.first);
+    }
+    return _entryOrder.emplace(dirPath, std::move(names)).first->second;
+}
+
+// swap an entry with its neighbour inside the directory's custom order (up/down buttons);
+// purely a display-order change, files are not moved
+void CtProjectPanel::_reorder_entry(Gtk::TreeModel::iterator iter, int direction)
+{
+    if (_searchMode) {
+        return; // the flat search list has no custom order
+    }
+    Gtk::TreeModel::iterator parentIter = iter->parent();
+    if (not parentIter) {
+        // top-level mount rows: the workspace mount order itself is user-defined
+        const std::string mountPath = (*iter)[_columns.colPath];
+        auto itVec = std::find(_mountFolders.begin(), _mountFolders.end(), mountPath);
+        if (itVec == _mountFolders.end()) {
+            return;
+        }
+        const int idx = int(itVec - _mountFolders.begin());
+        const int newIdx = idx + direction;
+        if (newIdx < 0 or newIdx >= int(_mountFolders.size())) {
+            CtDialogs::warning_dialog(direction < 0 ? "已是最上面" : "已是最下面",
+                                      *static_cast<Gtk::Window*>(_pCtMainWin));
+            return;
+        }
+        std::iter_swap(itVec, itVec + direction);
+        _persist();
+        _refresh_ui();
+        _treeView.set_cursor(Gtk::TreeModel::Path{std::to_string(newIdx)});
+        return;
+    }
+    const std::string dirPath = (*parentIter)[_columns.colPath];
+    const std::string name = Glib::ustring{(*iter)[_columns.colName]}.raw();
+    if (dirPath.empty() or name.empty()) {
+        return;
+    }
+    std::vector<std::string>& order = _ensure_entry_order(dirPath);
+    auto pos = std::find(order.begin(), order.end(), name);
+    if (pos == order.end()) {
+        return;
+    }
+    const int idx = int(pos - order.begin());
+    const int newIdx = idx + direction;
+    if (newIdx < 0 or newIdx >= int(order.size())) {
+        CtDialogs::warning_dialog(direction < 0 ? "已是最上面" : "已是最下面",
+                                  *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    std::iter_swap(pos, pos + direction);
+    _persist();
+    // redraw this directory (keeps the expansion state) and reselect the entry
+    _populate_dir(dirPath, parentIter);
+    const std::string parentStr = _rTreeStore->get_path(parentIter).to_string();
+    _treeView.set_cursor(Gtk::TreeModel::Path{parentStr + ":" + std::to_string(newIdx)});
+}
+
 void CtProjectPanel::_move_entry_up()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _reorder_entry(iter, -1); // only the position among its siblings changes
+}
+
+void CtProjectPanel::_move_entry_down()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _reorder_entry(iter, +1); // only the position among its siblings changes
+}
+
+void CtProjectPanel::_move_entry_promote()
 {
     Gtk::TreeModel::iterator iter = _selected_fs_entry();
     if (not iter) {
@@ -968,61 +1159,7 @@ void CtProjectPanel::_move_entry_up()
     _move_entry_to(fs::path{entryPath}, fs::path{grandDir});
 }
 
-void CtProjectPanel::_move_entry_down()
-{
-    Gtk::TreeModel::iterator iter = _selected_fs_entry();
-    if (not iter) {
-        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    if (not iter->parent()) {
-        // top-level mount rows are workspace roots themselves: moving one into
-        // another root would take it out of its own root folder
-        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    // target = the first folder row shown below the selected row (its next folder sibling;
-    // siblings of a non-root row always stay inside the same mount root)
-    Gtk::TreeModel::iterator it = iter;
-    std::string targetDir;
-    for (++it; it; ++it) {
-        Gtk::TreeModel::Row row = *it;
-        if (KindFs == (int)row[_columns.colKind] and not (bool)row[_columns.colDummy]
-            and (bool)row[_columns.colIsDir] and not ((std::string)row[_columns.colPath]).empty())
-        {
-            targetDir = row[_columns.colPath];
-            break;
-        }
-    }
-    if (targetDir.empty()) {
-        CtDialogs::warning_dialog("所选节点下方没有相邻的文件夹节点，无法移动到下一级",
-                                  *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    _move_entry_to(fs::path{(*iter)[_columns.colPath]}, fs::path{targetDir});
-}
-
-void CtProjectPanel::_move_entry_to_root()
-{
-    Gtk::TreeModel::iterator iter = _selected_fs_entry();
-    if (not iter) {
-        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    if (not iter->parent()) {
-        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    const std::string rootPath = (*_root_row_of(iter))[_columns.colPath];
-    const std::string parentPath = (*iter->parent())[_columns.colPath];
-    if (parentPath == rootPath) {
-        CtDialogs::warning_dialog("已在根文件夹的第一层", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
-    }
-    _move_entry_to(fs::path{(*iter)[_columns.colPath]}, fs::path{rootPath});
-}
-
-void CtProjectPanel::_move_entry_into_prev_folder()
+void CtProjectPanel::_move_entry_demote()
 {
     Gtk::TreeModel::iterator iter = _selected_fs_entry();
     if (not iter) {
@@ -1097,6 +1234,17 @@ void CtProjectPanel::_on_menu_rename()
         spdlog::error("CtProjectPanel: failed to rename {} to {}", oldPath, newPath);
         return;
     }
+    // keep the custom order table in sync (same directory, new name keeps the old position)
+    {
+        const std::string dirPath = Glib::path_get_dirname(oldPath);
+        auto itOrder = _entryOrder.find(dirPath);
+        if (itOrder != _entryOrder.end()) {
+            const std::string oldName = Glib::path_get_basename(oldPath);
+            const std::string newName = Glib::path_get_basename(newPath);
+            std::replace(itOrder->second.begin(), itOrder->second.end(), oldName, newName);
+            _persist();
+        }
+    }
     _refresh_parent_of(Glib::path_get_dirname(oldPath));
 }
 
@@ -1114,6 +1262,19 @@ void CtProjectPanel::_on_menu_delete()
         return;
     }
     fs::remove_all(fs::path{delPath});
+    // drop the deleted entry from the directory's custom order table
+    {
+        const std::string dirPath = Glib::path_get_dirname(delPath);
+        auto itOrder = _entryOrder.find(dirPath);
+        if (itOrder != _entryOrder.end()) {
+            const std::string name = Glib::path_get_basename(delPath);
+            auto posName = std::find(itOrder->second.begin(), itOrder->second.end(), name);
+            if (posName != itOrder->second.end()) {
+                itOrder->second.erase(posName);
+                _persist();
+            }
+        }
+    }
     _refresh_parent_of(Glib::path_get_dirname(delPath));
 }
 

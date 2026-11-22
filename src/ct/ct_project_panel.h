@@ -15,6 +15,7 @@
 #pragma once
 
 #include <gtkmm.h>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -89,14 +90,15 @@ protected:
     void          _on_menu_new_folder();
     void          _on_menu_rename();
     void          _on_menu_delete();
-    // quick action bar (arrow buttons, cherrytree-like node moves mapped to the filesystem):
-    // up = to the mount root first level, down = into the next folder sibling,
-    // left = promote (out of the current folder), right = demote (into the previous sibling folder)
+    // quick action bar (arrow buttons): up/down reorder entries among their siblings
+    // (custom order persisted per directory, no auto-sorting), left/right move for real
+    // between levels (left = promote out of the folder, right = demote into a sibling folder)
     void          _new_sibling_folder();
     void          _move_entry_up();
     void          _move_entry_down();
-    void          _move_entry_to_root();
-    void          _move_entry_into_prev_folder();
+    void          _move_entry_promote();
+    void          _move_entry_demote();
+    void          _reorder_entry(Gtk::TreeModel::iterator iter, int direction);
     bool          _create_folder_in(const std::string& dirPath);
     void          _move_entry_to(const fs::path& src, const fs::path& dstDir);
     Gtk::TreeModel::iterator _selected_fs_entry();
@@ -104,6 +106,8 @@ protected:
     Gtk::TreeModel::iterator _find_row_by_fs_path(const std::string& fsPath);
     void          _restore_expanded_rows(const Gtk::TreeModel::Children& children,
                                          const std::set<std::string>& expandedPaths);
+    std::vector<std::string>& _ensure_entry_order(const std::string& dirPath);
+    static std::string _order_key_encode(const std::string& dirPath);
     void          _on_menu_refresh_mount();
     void          _on_menu_unmount();
     void          _on_menu_jump_note();
@@ -140,4 +144,7 @@ protected:
     std::vector<Glib::RefPtr<Gio::FileMonitor>> _fileMonitors;
     sigc::connection _pendingRefreshConn;
     std::list<sigc::connection> _sigcConnections;
+    // custom display order per directory (persisted in the sidecar): entries are shown
+    // exactly in this order once recorded -- no auto-sorting, only up/down changes it
+    std::map<std::string, std::vector<std::string>> _entryOrder;
 };
