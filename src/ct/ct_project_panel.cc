@@ -26,10 +26,25 @@ CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
 {
     set_spacing(2);
 
+    // header row with quick action buttons (explorer-like tree maintenance)
+    Gtk::Box* pHeaderBox = Gtk::manage(new Gtk::Box{Gtk::ORIENTATION_HORIZONTAL, 2});
     _headerLabel.set_text("工作空间");
     _headerLabel.set_xalign(0.02f);
     _headerLabel.get_style_context()->add_class("ct-project-panel-header");
-    pack_start(_headerLabel, Gtk::PACK_SHRINK);
+    pHeaderBox->pack_start(_headerLabel, Gtk::PACK_EXPAND_WIDGET);
+    const auto addQuickBtn = [pHeaderBox](const char* iconName, const Glib::ustring& tooltip,
+                                          std::function<void()> slot) {
+        Gtk::Button* pBtn = Gtk::manage(new Gtk::Button{});
+        pBtn->set_image_from_icon_name(iconName, Gtk::ICON_SIZE_MENU);
+        pBtn->set_tooltip_text(tooltip);
+        pBtn->set_relief(Gtk::RELIEF_NONE);
+        pBtn->signal_clicked().connect(slot);
+        pHeaderBox->pack_start(*pBtn, Gtk::PACK_SHRINK);
+    };
+    addQuickBtn("folder-new", "新建同级文件夹", sigc::mem_fun(*this, &CtProjectPanel::_new_sibling_folder));
+    addQuickBtn("go-up", "移动到上一级（父目录）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_up));
+    addQuickBtn("go-down", "移动到下一级（下方相邻的文件夹节点）", sigc::mem_fun(*this, &CtProjectPanel::_move_entry_down));
+    pack_start(*pHeaderBox, Gtk::PACK_SHRINK);
 
     // filename search box (Enter to search across all mounted folders)
     _searchEntry.set_placeholder_text("搜索文件名，回车执行...");
@@ -739,14 +754,25 @@ void CtProjectPanel::_on_menu_add_file()
     _populate_dir(dirPath, iter);
 }
 
-void CtProjectPanel::_on_menu_new_folder()
+// ---- quick action bar ------------------------------------------------------
+
+Gtk::TreeModel::iterator CtProjectPanel::_selected_fs_entry()
 {
     Gtk::TreeModel::iterator iter = _treeView.get_selection()->get_selected();
-    if (not iter or not (*iter)[_columns.colIsDir] or KindNoteShortcut == (*iter)[_columns.colKind]) {
-        return;
+    if (not iter) {
+        return {};
     }
-    const std::string dirPath = (*iter)[_columns.colPath];
+    Gtk::TreeModel::Row row = *iter;
+    if (KindFs != (int)row[_columns.colKind] or (bool)row[_columns.colDummy]
+        or ((std::string)row[_columns.colPath]).empty())
+    {
+        return {};
+    }
+    return iter;
+}
 
+bool CtProjectPanel::_create_folder_in(const std::string& dirPath)
+{
     Gtk::Dialog dialog{"新建文件夹", *static_cast<Gtk::Window*>(_pCtMainWin), true};
     dialog.add_button("取消", Gtk::RESPONSE_CANCEL);
     dialog.add_button("确定", Gtk::RESPONSE_OK);
@@ -757,14 +783,103 @@ void CtProjectPanel::_on_menu_new_folder()
     pBox->pack_start(entry, Gtk::PACK_SHRINK);
     pBox->show_all();
     if (Gtk::RESPONSE_OK != dialog.run() or entry.get_text().empty()) {
-        return;
+        return false;
     }
     const std::string newDirPath = Glib::build_filename(dirPath, entry.get_text());
     if (Glib::file_test(newDirPath, Glib::FILE_TEST_EXISTS)) {
         CtDialogs::warning_dialog("同名文件夹已存在", *static_cast<Gtk::Window*>(_pCtMainWin));
-        return;
+        return false;
     }
     if (g_mkdir_with_parents(newDirPath.c_str(), 0755) == 0) {
+        _refresh_parent_of(dirPath);
+        return true;
+    }
+    return false;
+}
+
+void CtProjectPanel::_move_entry_to(const fs::path& src, const fs::path& dstDir)
+{
+    const fs::path dst = dstDir / src.filename();
+    if (Glib::file_test(dst.string(), Glib::FILE_TEST_EXISTS)) {
+        CtDialogs::warning_dialog("目标位置已存在同名条目：\n" + dst.string(), *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    if (not fs::move_file(src, dst)) {
+        CtDialogs::warning_dialog("移动失败：" + src.string(), *static_cast<Gtk::Window*>(_pCtMainWin));
+        spdlog::warn("workspace move failed: {} -> {}", src.string(), dst.string());
+        return;
+    }
+    spdlog::debug("workspace moved {} -> {}", src.string(), dst.string());
+    // rescan both the source dir row and the target dir row (if present in the tree)
+    _refresh_parent_of(Glib::path_get_dirname(src.string()));
+    _refresh_parent_of(dstDir.string());
+}
+
+void CtProjectPanel::_new_sibling_folder()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    // a top-level mount row creates inside the mount; other entries create in their parent (same level)
+    const std::string entryPath = (*iter)[_columns.colPath];
+    const std::string dirPath = iter->parent() ? Glib::path_get_dirname(entryPath) : entryPath;
+    _create_folder_in(dirPath);
+}
+
+void CtProjectPanel::_move_entry_up()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    const std::string entryPath = (*iter)[_columns.colPath];
+    const std::string parentDir = Glib::path_get_dirname(entryPath);
+    const std::string grandDir = Glib::path_get_dirname(parentDir);
+    if (not iter->parent() or grandDir.empty() or grandDir == parentDir) {
+        CtDialogs::warning_dialog("顶层挂载文件夹无法再上移", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _move_entry_to(fs::path{entryPath}, fs::path{grandDir});
+}
+
+void CtProjectPanel::_move_entry_down()
+{
+    Gtk::TreeModel::iterator iter = _selected_fs_entry();
+    if (not iter) {
+        CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    // target = the first folder row shown below the selected row (its next folder sibling)
+    Gtk::TreeModel::iterator it = iter;
+    std::string targetDir;
+    for (++it; it; ++it) {
+        Gtk::TreeModel::Row row = *it;
+        if (KindFs == (int)row[_columns.colKind] and not (bool)row[_columns.colDummy]
+            and (bool)row[_columns.colIsDir] and not ((std::string)row[_columns.colPath]).empty())
+        {
+            targetDir = row[_columns.colPath];
+            break;
+        }
+    }
+    if (targetDir.empty()) {
+        CtDialogs::warning_dialog("所选节点下方没有相邻的文件夹节点，无法移动到下一级",
+                                  *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    _move_entry_to(fs::path{(*iter)[_columns.colPath]}, fs::path{targetDir});
+}
+
+void CtProjectPanel::_on_menu_new_folder()
+{
+    Gtk::TreeModel::iterator iter = _treeView.get_selection()->get_selected();
+    if (not iter or not (*iter)[_columns.colIsDir] or KindNoteShortcut == (*iter)[_columns.colKind]) {
+        return;
+    }
+    const std::string dirPath = (*iter)[_columns.colPath];
+    if (_create_folder_in(dirPath)) {
         _populate_dir(dirPath, iter);
     }
 }

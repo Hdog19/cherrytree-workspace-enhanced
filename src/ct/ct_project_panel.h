@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "ct_filesystem.h"
+
 class CtMainWin;
 
 class CtProjectPanelColumns : public Gtk::TreeModelColumnRecord
@@ -86,6 +88,13 @@ protected:
     void          _on_menu_new_folder();
     void          _on_menu_rename();
     void          _on_menu_delete();
+    // quick action bar: new sibling folder / move entry to the parent dir / into the next folder
+    void          _new_sibling_folder();
+    void          _move_entry_up();
+    void          _move_entry_down();
+    bool          _create_folder_in(const std::string& dirPath);
+    void          _move_entry_to(const fs::path& src, const fs::path& dstDir);
+    Gtk::TreeModel::iterator _selected_fs_entry();
     void          _on_menu_refresh_mount();
     void          _on_menu_unmount();
     void          _on_menu_jump_note();
