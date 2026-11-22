@@ -19,6 +19,7 @@
 #include <glibmm/i18n.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <set>
 
 CtProjectPanel::CtProjectPanel(CtMainWin* pCtMainWin)
  : Gtk::Box{Gtk::ORIENTATION_VERTICAL}
@@ -411,8 +412,22 @@ bool CtProjectPanel::_is_row_dummy(const Gtk::TreeModel::iterator& iter)
 
 void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeModel::iterator& parentIter)
 {
+    // filesystem paths of the expanded folders inside this subtree (may stay empty)
+    std::set<std::string> expandedPaths;
     // clear placeholder children
     if (parentIter) {
+        // remember the expanded folders inside this subtree (by filesystem path),
+        // so that rescanning this dir does not collapse them
+        std::function<void(const Gtk::TreeModel::Children&)> collectExpanded =
+            [&](const Gtk::TreeModel::Children& children) {
+                for (auto& row : children) {
+                    if (_treeView.row_expanded(_rTreeStore->get_path(row))) {
+                        expandedPaths.insert((std::string)row[_columns.colPath]);
+                        collectExpanded(row.children());
+                    }
+                }
+            };
+        collectExpanded(parentIter->children());
         auto children = parentIter->children();
         while (children.size() > 0) {
             _rTreeStore->erase(children.begin());
@@ -467,6 +482,24 @@ void CtProjectPanel::_populate_dir(const std::string& dirPath, const Gtk::TreeMo
             dummyRow[_columns.colKind] = -1;
             dummyRow[_columns.colNodeId] = 0;
         }
+    }
+
+    if (parentIter and not expandedPaths.empty()) {
+        // restore the expanded folders: each expand_row lazily fills its level
+        // synchronously, so deeper levels can be restored right after
+        std::function<void(const Gtk::TreeModel::Children&)> restoreExpanded =
+            [&](const Gtk::TreeModel::Children& children) {
+                for (auto& row : children) {
+                    const std::string rowFsPath = row[_columns.colPath];
+                    if ((bool)row[_columns.colIsDir] and not (bool)row[_columns.colDummy]
+                        and expandedPaths.count(rowFsPath))
+                    {
+                        _treeView.expand_row(_rTreeStore->get_path(row), false);
+                        restoreExpanded(row.children());
+                    }
+                }
+            };
+        restoreExpanded(parentIter->children());
     }
 }
 
