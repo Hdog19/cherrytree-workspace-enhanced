@@ -836,12 +836,19 @@ void CtProjectPanel::_move_entry_up()
         return;
     }
     const std::string entryPath = (*iter)[_columns.colPath];
-    const std::string parentDir = Glib::path_get_dirname(entryPath);
-    const std::string grandDir = Glib::path_get_dirname(parentDir);
-    if (not iter->parent() or grandDir.empty() or grandDir == parentDir) {
-        CtDialogs::warning_dialog("顶层挂载文件夹无法再上移", *static_cast<Gtk::Window*>(_pCtMainWin));
+    Gtk::TreeModel::iterator parentIter = iter->parent();
+    if (not parentIter) {
+        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
         return;
     }
+    if (not parentIter->parent()) {
+        // the parent row is a mount root: moving up would leave the workspace root
+        CtDialogs::warning_dialog("已在根文件夹的第一层，不能移动到根文件夹之外或与之平级",
+                                  *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    // target = the parent dir's own parent row path (always inside the mount root)
+    const std::string grandDir = (*parentIter->parent())[_columns.colPath];
     _move_entry_to(fs::path{entryPath}, fs::path{grandDir});
 }
 
@@ -852,7 +859,14 @@ void CtProjectPanel::_move_entry_down()
         CtDialogs::warning_dialog("请先在树中选择一个文件或文件夹", *static_cast<Gtk::Window*>(_pCtMainWin));
         return;
     }
-    // target = the first folder row shown below the selected row (its next folder sibling)
+    if (not iter->parent()) {
+        // top-level mount rows are workspace roots themselves: moving one into
+        // another root would take it out of its own root folder
+        CtDialogs::warning_dialog("顶层挂载文件夹不能移动", *static_cast<Gtk::Window*>(_pCtMainWin));
+        return;
+    }
+    // target = the first folder row shown below the selected row (its next folder sibling;
+    // siblings of a non-root row always stay inside the same mount root)
     Gtk::TreeModel::iterator it = iter;
     std::string targetDir;
     for (++it; it; ++it) {
