@@ -1,4 +1,45 @@
+# CherryTree 工作空间增强版 / CherryTree Workspace Enhanced
+
+> **English**: This project is a modified distribution based on [Cherrytree](https://github.com/giuspen/cherrytree)
+> by Giuseppe Penone and Evgenii Gurianov, licensed under the GNU GPL-3.0-or-later.
+> All modifications in this repository are also released under GPL-3.0-or-later.
+
+## 关于本项目（开源声明）
+
+本项目基于开源项目 **[Cherrytree](https://github.com/giuspen/cherrytree)**（官方主页 [giuspen.net/cherrytree](https://www.giuspen.net/cherrytree/)）修改而来。
+
+- **上游项目**：Cherrytree，Copyright (C) 2009-2025 Giuseppe Penone (giuspen) 及 Evgenii Gurianov (txe) 等上游作者
+- **上游许可证**：GNU GPL-3.0-or-later
+- **本仓库许可证**：GNU GPL-3.0-or-later（与上游一致，见 [LICENSE](LICENSE) 文件）
+
+依据 GPL-3.0-or-later 许可证，本仓库公开全部修改源代码；原版权声明与许可条款全部保留。
+除下述修改部分外，程序功能与上游 cherrytree 1.7.2 一致，上游的功劳和贡献属于原作者。
+
+## 本项目的修改内容（基于 1.7.2）
+
+主界面与工作空间相关增强：
+
+- **主界面 2×2 网格布局**：左列 = 笔记资源树 / 工作空间面板（共用同一条垂直分隔线），
+  右列 = 笔记编辑器 / 工作空间浏览器；两条水平分隔线位置实时同步形成整齐十字，
+  四个象限互不遮挡；无工作空间内容时下排自动隐藏
+- **工作空间面板增强**：
+  - 多挂载根文件夹 + 笔记快捷入口（`.ctb` 旁路 sidecar 配置，随文档走）
+  - 资源管理器式鼠标悬停阴影高亮（面板树、浏览器列表/图标视图、笔记树）
+  - 标题行快捷按钮：新建同级文件夹
+  - **四箭头节点移动**：⬆/⬇ 只在同级内调整位置（自定义顺序持久保存，永不自动排序）；
+    ⬅ 升级（移出当前文件夹）、➡ 降级（移入上一个兄弟文件夹）——真实改变文件存储位置，
+    且始终限制在挂载根文件夹内部
+  - 展开状态在移动/刷新后完整保持（GTK 无子行自动折叠问题的完整处理）
+  - 文件名递归搜索、双击文件夹展开/折叠、右键菜单（打开/重命名/删除/复制路径等）
+  - 文件系统改动实时监视与刷新
+- **文件链接插入笔记**：把工作空间内文件/文件夹以链接形式插入当前笔记，点击可跳转
+
+构建方式见 [BUILDING.md](BUILDING.md) 与 `build.sh`（Windows/MSYS2-UCRT64 环境）。
+
+---
+
 # CherryTree
+
 A hierarchical note taking application, featuring rich text and syntax highlighting, storing data in either a single file (xml or sqlite) or multiple files and directories.
 The project home page is [giuspen.net/cherrytree](https://www.giuspen.net/cherrytree/).
 

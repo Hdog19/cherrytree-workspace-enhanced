@@ -17,3 +17,8 @@ build_output*.txt
 Screenshot_*.png
 .claude
 cmake_test_discovery_*.json
+
+# local dev/debug scripts (contain private machine paths)
+repro_save*.sh
+check_occupy.sh
+build_portable.sh
